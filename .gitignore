@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.log
+.fgd_memory.json
+fgd_config.yaml
+.env
+venv/
+.fgd_cache/
+.DS_Store

@@ -5,15 +5,13 @@ FGD Stack MCP Server – FULLY WORKING, GROK-ONLY
 
 import os
 import json
-import hashlib
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import Dict, Any, Callable, Awaitable, List
 import asyncio
 import yaml
 import aiohttp
-import openai
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -138,16 +136,41 @@ class FGDMCPServer:
         self.scan = self.config.get('scan', {})
         self.max_dir_size = self.scan.get('max_dir_size_gb', 2) * 1_073_741_824
         self.max_files = self.scan.get('max_files_per_scan', 5)
-        self.max_file_kb = self.scan.get('max_file_size_kb', 250) * 1024
+        self.max_file_bytes = self.scan.get('max_file_size_kb', 250) * 1024
 
         self.memory = MemoryStore(self.watch_dir / ".fgd_memory.json", self.config)
         self.llm = LLMBackend(self.config)
         self.recent_changes = []
         self.observer = None
+        self.log_file = self._resolve_log_file()
+        self._ensure_log_handler()
+        logger.info("Logging to %s", self.log_file)
         self._start_watcher()
 
         self.server = Server("fgd-mcp-server")
         self._setup_handlers()
+
+    def _resolve_log_file(self) -> Path:
+        configured = self.config.get('log_file')
+        if configured:
+            candidate = Path(configured)
+            if not candidate.is_absolute():
+                candidate = (self.watch_dir / candidate).resolve()
+        else:
+            candidate = (self.watch_dir / "fgd_server.log").resolve()
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        return candidate
+
+    def _ensure_log_handler(self) -> None:
+        existing = [
+            h for h in logger.handlers
+            if isinstance(h, logging.FileHandler) and Path(getattr(h, 'baseFilename', '')) == self.log_file
+        ]
+        if existing:
+            return
+        file_handler = logging.FileHandler(self.log_file, encoding='utf-8')
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(file_handler)
 
     def _start_watcher(self):
         try:
@@ -183,29 +206,61 @@ class FGDMCPServer:
         @self.server.list_tools()
         async def list_tools():
             return [
-                Tool(name="read_file", description="Read file", inputSchema={"type": "object", "properties": {"filepath": {"type": "string"}}, "required": ["filepath"]}),
-                Tool(name="llm_query", description="Ask Grok", inputSchema={"type": "object", "properties": {"prompt": {"type": "string"}}, "required": ["prompt"]}),
+                Tool(
+                    name="read_file",
+                    description="Read file",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {"filepath": {"type": "string"}},
+                        "required": ["filepath"],
+                    },
+                ),
+                Tool(
+                    name="llm_query",
+                    description="Ask Grok",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {"prompt": {"type": "string"}},
+                        "required": ["prompt"],
+                    },
+                ),
             ]
 
-        @self.server.set_tool_handler("read_file")
-        async def read_file(args):
+        async def handle_read_file(args):
             try:
-                path = self._sanitize(args["filepath"])
-                if path.stat().st_size > self.max_file_kb:
-                    return [TextContent(type="text", text="Error: File too large (>250KB)")]
+                filepath = args.get("filepath")
+                if not filepath:
+                    return [TextContent(type="text", text="Error: Missing 'filepath' argument")]
+                path = self._sanitize(filepath)
+                if path.stat().st_size > self.max_file_bytes:
+                    limit_kb = self.max_file_bytes // 1024
+                    return [TextContent(type="text", text=f"Error: File too large (>{limit_kb} KB)")]
                 content = path.read_text(encoding='utf-8')
-                self.memory.add_context("file_read", {"path": args["filepath"]})
+                self.memory.add_context("file_read", {"path": filepath})
                 return [TextContent(type="text", text=content)]
             except Exception as e:
                 return [TextContent(type="text", text=f"Error: {e}")]
 
-        @self.server.set_tool_handler("llm_query")
-        async def llm_query(args):
-            prompt = args["prompt"]
+        async def handle_llm_query(args):
+            prompt = args.get("prompt")
+            if not prompt:
+                return [TextContent(type="text", text="Error: Missing 'prompt' argument")]
             context = json.dumps(self.memory.get_context()[-5:])
             response = await self.llm.query(prompt, "grok", context=context)
             self.memory.remember(f"grok_{datetime.now().isoformat()}", response, "llm")
             return [TextContent(type="text", text=response)]
+
+        tool_handlers: Dict[str, Callable[[Dict[str, Any]], Awaitable[List[TextContent]]]] = {
+            "read_file": handle_read_file,
+            "llm_query": handle_llm_query,
+        }
+
+        @self.server.call_tool()
+        async def handle_tool_call(tool_name, arguments):
+            handler = tool_handlers.get(tool_name)
+            if not handler:
+                return [TextContent(type="text", text=f"Error: Unknown tool '{tool_name}'")]
+            return await handler(arguments or {})
 
     async def run(self):
         logger.info("MCP Server starting...")
@@ -216,6 +271,7 @@ class FGDMCPServer:
         if self.observer:
             self.observer.stop()
             self.observer.join()
+            self.observer = None
 
 # ==================== ENTRY POINT ====================
 if __name__ == "__main__":
