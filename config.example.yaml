@@ -1,5 +1,6 @@
-watch_dir: "C:\Users\Admin\Desktop\FGD_Full_Project"
+watch_dir: "C:\\Users\\Admin\\Desktop\\FGD_Full_Project"
 memory_file: ".fgd_memory.json"
+log_file: "fgd_server.log"
 context_limit: 20
 scan:
   max_dir_size_gb: 2
