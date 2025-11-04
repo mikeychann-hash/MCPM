@@ -1,11 +1,13 @@
-watch_dir: "C:\\Users\\Admin\\Desktop\\FGD_Full_Project"
+     watch_dir: "C:\Users\Admin\Desktop\FGD_Full_Project"
 memory_file: ".fgd_memory.json"
-log_file: "fgd_server.log"
 context_limit: 20
 scan:
   max_dir_size_gb: 2
   max_files_per_scan: 5
   max_file_size_kb: 250
+reference_dirs:
+  - "/path/to/docs"
+  - "/path/to/shared-lib"
 llm:
   default_provider: "grok"
   providers:
