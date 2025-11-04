@@ -14,6 +14,7 @@ import os
 import json
 import logging
 import traceback
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Set up logging to file AND console
@@ -268,8 +269,62 @@ class FGDGUI(QWidget):
                 else:
                     self.log_view.setTextColor(Qt.GlobalColor.white)
                 self.log_view.insertPlainText(line + "\n")
+
+            # Check for pending edits
+            self.check_pending_edits()
         except Exception as e:
             logger.debug(f"Error updating logs: {e}")
+
+    def check_pending_edits(self):
+        """Poll for pending edit requests from the backend."""
+        try:
+            dir_path = self.path_edit.text().strip()
+            if not dir_path:
+                return
+
+            pending_file = Path(dir_path) / ".fgd_pending_edit.json"
+            if not pending_file.exists():
+                return
+
+            # Load pending edit
+            pending_data = json.loads(pending_file.read_text())
+
+            # Only update if this is a new pending edit
+            if self.pending_edit and self.pending_edit.get("timestamp") == pending_data.get("timestamp"):
+                return
+
+            self.pending_edit = pending_data
+
+            # Display diff in the diff viewer
+            diff_text = f"""
+📝 PENDING EDIT: {pending_data['filepath']}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔴 OLD TEXT:
+{pending_data['old_text']}
+
+🟢 NEW TEXT:
+{pending_data['new_text']}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📄 PREVIEW (first 500 chars):
+{pending_data['preview']}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⏱️  Timestamp: {pending_data['timestamp']}
+
+Click "Approve" to apply changes or "Reject" to cancel.
+"""
+            self.diff_view.setPlainText(diff_text)
+
+            # Highlight approve button
+            self.approve_btn.setStyleSheet("background-color: #00ff00; color: #000; font-weight: bold;")
+            self.reject_btn.setStyleSheet("background-color: #ff0000; color: #fff; font-weight: bold;")
+
+            logger.info(f"Pending edit detected: {pending_data['filepath']}")
+
+        except Exception as e:
+            logger.debug(f"Error checking pending edits: {e}")
 
     def clear_filters(self):
         self.level.setCurrentIndex(0)
@@ -278,28 +333,80 @@ class FGDGUI(QWidget):
     def approve_edit(self):
         try:
             if self.pending_edit:
-                # In a real implementation, this would send approval to the backend
-                logger.info(f"Edit approved for: {self.pending_edit.get('filepath')}")
-                QMessageBox.information(self, "Edit Approved", "Changes have been approved and applied.")
+                dir_path = self.path_edit.text().strip()
+                if not dir_path:
+                    QMessageBox.warning(self, "Error", "No project directory selected")
+                    return
+
+                # Write approval decision
+                approval_file = Path(dir_path) / ".fgd_approval.json"
+                approval_data = {
+                    "approved": True,
+                    "filepath": self.pending_edit['filepath'],
+                    "old_text": self.pending_edit['old_text'],
+                    "new_text": self.pending_edit['new_text'],
+                    "timestamp": datetime.now().isoformat()
+                }
+                approval_file.write_text(json.dumps(approval_data, indent=2))
+
+                # Delete pending edit file to signal completion
+                pending_file = Path(dir_path) / ".fgd_pending_edit.json"
+                if pending_file.exists():
+                    pending_file.unlink()
+
+                logger.info(f"✅ Edit APPROVED for: {self.pending_edit.get('filepath')}")
+                QMessageBox.information(self, "Edit Approved",
+                    f"✅ Changes approved!\n\nFile: {self.pending_edit['filepath']}\n\nThe backend will apply the changes.")
+
+                # Clear display
                 self.diff_view.clear()
+                self.approve_btn.setStyleSheet("")
+                self.reject_btn.setStyleSheet("")
                 self.pending_edit = None
             else:
                 QMessageBox.information(self, "No Pending Edit", "There are no pending edits to approve.")
         except Exception as e:
             logger.error(f"Error approving edit: {e}")
+            logger.error(traceback.format_exc())
             QMessageBox.warning(self, "Error", f"Failed to approve edit: {str(e)}")
 
     def reject_edit(self):
         try:
             if self.pending_edit:
-                logger.info(f"Edit rejected for: {self.pending_edit.get('filepath')}")
-                QMessageBox.information(self, "Edit Rejected", "Changes have been rejected.")
+                dir_path = self.path_edit.text().strip()
+                if not dir_path:
+                    QMessageBox.warning(self, "Error", "No project directory selected")
+                    return
+
+                # Write rejection decision
+                approval_file = Path(dir_path) / ".fgd_approval.json"
+                approval_data = {
+                    "approved": False,
+                    "filepath": self.pending_edit['filepath'],
+                    "reason": "Rejected by user",
+                    "timestamp": datetime.now().isoformat()
+                }
+                approval_file.write_text(json.dumps(approval_data, indent=2))
+
+                # Delete pending edit file
+                pending_file = Path(dir_path) / ".fgd_pending_edit.json"
+                if pending_file.exists():
+                    pending_file.unlink()
+
+                logger.info(f"❌ Edit REJECTED for: {self.pending_edit.get('filepath')}")
+                QMessageBox.information(self, "Edit Rejected",
+                    f"❌ Changes rejected!\n\nFile: {self.pending_edit['filepath']}\n\nNo changes will be made.")
+
+                # Clear display
                 self.diff_view.clear()
+                self.approve_btn.setStyleSheet("")
+                self.reject_btn.setStyleSheet("")
                 self.pending_edit = None
             else:
                 QMessageBox.information(self, "No Pending Edit", "There are no pending edits to reject.")
         except Exception as e:
             logger.error(f"Error rejecting edit: {e}")
+            logger.error(traceback.format_exc())
             QMessageBox.warning(self, "Error", f"Failed to reject edit: {str(e)}")
 
     def apply_dark_mode(self, dark):

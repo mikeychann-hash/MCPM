@@ -4,6 +4,17 @@ __pycache__/
 .fgd_memory.json
 fgd_config.yaml
 .env
+.env.local
 venv/
 .fgd_cache/
 .DS_Store
+
+# Security: Never commit tokens or secrets
+*.token
+*.key
+*_token.txt
+.fgd_approval.json
+.fgd_pending_edit.json
+
+# Backup files (may contain sensitive data)
+*.bak
