@@ -1,4 +1,4 @@
-     watch_dir: "C:\Users\Admin\Desktop\FGD_Full_Project"
+watch_dir: "./your-project-directory"
 memory_file: ".fgd_memory.json"
 context_limit: 20
 scan:

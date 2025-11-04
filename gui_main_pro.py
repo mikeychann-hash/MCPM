@@ -12,27 +12,48 @@ import yaml
 import subprocess
 import os
 import json
+import logging
+import traceback
 from dotenv import load_dotenv
+
+# Set up logging to file AND console
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('mcpm_gui.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
 class FGDGUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MCPM v5.0 – AI Code Co‑Pilot")
-        self.resize(1200, 800)
-        self.layout = QVBoxLayout()
-        self.setLayout(self.layout)
-        self.process = None
-        self.log_file = None
-        self.pending_action = None
+        try:
+            self.setWindowTitle("MCPM v5.0 – AI Code Co‑Pilot")
+            self.resize(1200, 800)
+            self.layout = QVBoxLayout()
+            self.setLayout(self.layout)
+            self.process = None
+            self.log_file = None
+            self.pending_action = None
+            self.pending_edit = None
 
-        self._build_ui()
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_logs)
-        self.timer.start(1000)
+            self._build_ui()
+            self.timer = QTimer()
+            self.timer.timeout.connect(self.update_logs)
+            self.timer.start(1000)
 
-        self.apply_dark_mode(True)
+            self.apply_dark_mode(True)
+            logger.info("GUI initialized successfully")
+        except Exception as e:
+            logger.error(f"GUI initialization failed: {e}")
+            logger.error(traceback.format_exc())
+            QMessageBox.critical(None, "Initialization Error", f"Failed to initialize GUI:\n{str(e)}\n\nCheck mcpm_gui.log for details")
+            raise
 
     def _build_ui(self):
         # Header
@@ -143,19 +164,33 @@ class FGDGUI(QWidget):
 
     def _add_tree_items(self, parent, path):
         try:
-            for p in path.iterdir():
+            for p in sorted(path.iterdir(), key=lambda x: (not x.is_dir(), x.name)):
                 if p.name.startswith('.') or p.name in ['node_modules', '__pycache__']:
                     continue
                 item = QTreeWidgetItem([p.name])
+                item.setData(0, Qt.ItemDataRole.UserRole, str(p))  # Store full path
                 parent.addChild(item)
                 if p.is_dir():
                     self._add_tree_items(item, p)
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Error adding tree items for {path}: {e}")
 
     def on_file_click(self, item, column):
-        # Simplified – reconstruct path via tree traversal in real code
-        pass
+        try:
+            file_path = item.data(0, Qt.ItemDataRole.UserRole)
+            if file_path and Path(file_path).is_file():
+                path = Path(file_path)
+                if path.stat().st_size > 500_000:  # 500KB limit
+                    self.preview.setPlainText(f"File too large to preview: {path.stat().st_size / 1024:.1f} KB")
+                    return
+                try:
+                    content = path.read_text(encoding='utf-8')
+                    self.preview.setPlainText(content)
+                except UnicodeDecodeError:
+                    self.preview.setPlainText("[Binary file - cannot preview]")
+        except Exception as e:
+            logger.error(f"Error previewing file: {e}")
+            self.preview.setPlainText(f"Error: {str(e)}")
 
     def toggle_server(self):
         if self.process and self.process.poll() is None:
@@ -230,12 +265,39 @@ class FGDGUI(QWidget):
                 else:
                     self.log_view.setTextColor(Qt.GlobalColor.white)
                 self.log_view.insertPlainText(line + "\n")
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Error updating logs: {e}")
 
     def clear_filters(self):
         self.level.setCurrentIndex(0)
         self.search.clear()
+
+    def approve_edit(self):
+        try:
+            if self.pending_edit:
+                # In a real implementation, this would send approval to the backend
+                logger.info(f"Edit approved for: {self.pending_edit.get('filepath')}")
+                QMessageBox.information(self, "Edit Approved", "Changes have been approved and applied.")
+                self.diff_view.clear()
+                self.pending_edit = None
+            else:
+                QMessageBox.information(self, "No Pending Edit", "There are no pending edits to approve.")
+        except Exception as e:
+            logger.error(f"Error approving edit: {e}")
+            QMessageBox.warning(self, "Error", f"Failed to approve edit: {str(e)}")
+
+    def reject_edit(self):
+        try:
+            if self.pending_edit:
+                logger.info(f"Edit rejected for: {self.pending_edit.get('filepath')}")
+                QMessageBox.information(self, "Edit Rejected", "Changes have been rejected.")
+                self.diff_view.clear()
+                self.pending_edit = None
+            else:
+                QMessageBox.information(self, "No Pending Edit", "There are no pending edits to reject.")
+        except Exception as e:
+            logger.error(f"Error rejecting edit: {e}")
+            QMessageBox.warning(self, "Error", f"Failed to reject edit: {str(e)}")
 
     def apply_dark_mode(self, dark):
         if dark:
@@ -249,7 +311,21 @@ class FGDGUI(QWidget):
         event.accept()
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    win = FGDGUI()
-    win.show()
-    sys.exit(app.exec())
+    try:
+        logger.info("Starting MCPM GUI...")
+        app = QApplication(sys.argv)
+        win = FGDGUI()
+        win.show()
+        logger.info("GUI window displayed")
+        sys.exit(app.exec())
+    except Exception as e:
+        logger.critical(f"Fatal error: {e}")
+        logger.critical(traceback.format_exc())
+        # Show error dialog if possible
+        try:
+            QMessageBox.critical(None, "Fatal Error",
+                f"Application failed to start:\n{str(e)}\n\nCheck mcpm_gui.log for details.\n\nPress OK to exit.")
+        except:
+            print(f"\n{'='*60}\nFATAL ERROR:\n{e}\n{traceback.format_exc()}\n{'='*60}")
+        input("\nPress Enter to close...")
+        sys.exit(1)

@@ -14,7 +14,7 @@ import hashlib
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import asyncio
 import yaml
 import aiohttp
@@ -23,6 +23,7 @@ import shutil
 import subprocess
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+import traceback
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -183,8 +184,11 @@ class FGDMCPServer:
             if len(self.recent_changes) > 50:
                 self.recent_changes = self.recent_changes[-50:]
             self.memory.add_context("file_change", {"type": event_type, "path": rel})
-        except:
+        except ValueError:
+            # Path is outside watch_dir, ignore
             pass
+        except Exception as e:
+            logger.debug(f"Error processing file change for {path}: {e}")
 
     # ------------------------------------------------------------------- #
     # -------------------------- HELPERS -------------------------------- #
@@ -197,18 +201,67 @@ class FGDMCPServer:
         return p
 
     def _get_gitignore_patterns(self, root: Path) -> List[str]:
+        """Load gitignore patterns from .gitignore file"""
         gitignore = root / ".gitignore"
         if not gitignore.exists():
             return []
-        return [line.strip() for line in gitignore.read_text().splitlines()
-                if line.strip() and not line.startswith('#')]
+        try:
+            return [line.strip() for line in gitignore.read_text().splitlines()
+                    if line.strip() and not line.startswith('#')]
+        except Exception as e:
+            logger.warning(f"Failed to read .gitignore: {e}")
+            return []
 
     def _matches_gitignore(self, path: Path, patterns: List[str]) -> bool:
-        rel = path.relative_to(self.watch_dir)
-        for pat in patterns:
-            if rel.match(pat):
-                return True
-        return False
+        """Check if path matches any gitignore pattern using fnmatch"""
+        import fnmatch
+        try:
+            rel = str(path.relative_to(self.watch_dir))
+            # Normalize for cross-platform compatibility
+            rel_posix = rel.replace(os.sep, '/')
+
+            for pat in patterns:
+                # Handle directory patterns (ending with /)
+                if pat.endswith('/'):
+                    pat = pat.rstrip('/')
+                    if fnmatch.fnmatch(rel_posix, pat) or fnmatch.fnmatch(rel_posix, f"{pat}/*"):
+                        return True
+                # Handle patterns with directory separators
+                elif '/' in pat:
+                    if fnmatch.fnmatch(rel_posix, pat):
+                        return True
+                # Handle simple filename patterns - check against full path and basename
+                else:
+                    if fnmatch.fnmatch(path.name, pat) or fnmatch.fnmatch(rel_posix, f"**/{pat}"):
+                        return True
+            return False
+        except Exception as e:
+            logger.debug(f"Error matching gitignore for {path}: {e}")
+            return False
+
+    def _is_git_repo(self) -> bool:
+        """Check if watch_dir is a git repository"""
+        return (self.watch_dir / ".git").exists()
+
+    def _check_git_available(self) -> Optional[str]:
+        """Check if git is available and repo is initialized. Returns error message or None"""
+        try:
+            result = subprocess.run(
+                ["git", "--version"],
+                capture_output=True,
+                timeout=5
+            )
+            if result.returncode != 0:
+                return "Git is not installed or not in PATH"
+        except FileNotFoundError:
+            return "Git is not installed or not in PATH"
+        except Exception as e:
+            return f"Git check failed: {e}"
+
+        if not self._is_git_repo():
+            return "Directory is not a git repository (no .git folder found)"
+
+        return None
 
     # ------------------------------------------------------------------- #
     # --------------------------- TOOLS --------------------------------- #
@@ -343,48 +396,83 @@ class FGDMCPServer:
         # ---------- GIT DIFF ----------
         @self.server.set_tool_handler("git_diff")
         async def git_diff(args):
+            git_error = self._check_git_available()
+            if git_error:
+                return [TextContent(type="text", text=f"Error: {git_error}")]
+
             files = args.get("files", [])
             try:
                 result = subprocess.run(
                     ["git", "diff", "--", *files],
                     cwd=str(self.watch_dir),
-                    capture_output=True, text=True
+                    capture_output=True, text=True,
+                    timeout=30
                 )
                 diff = result.stdout or "No changes"
                 self.memory.remember(f"diff_{datetime.now().isoformat()}", diff, "git_diffs")
                 return [TextContent(type="text", text=diff)]
             except Exception as e:
+                logger.error(f"Git diff failed: {e}")
                 return [TextContent(type="text", text=f"Git error: {e}")]
 
         # ---------- GIT COMMIT ----------
         @self.server.set_tool_handler("git_commit")
         async def git_commit(args):
+            git_error = self._check_git_available()
+            if git_error:
+                return [TextContent(type="text", text=f"Error: {git_error}")]
+
             message = args["message"]
+            if not message or not message.strip():
+                return [TextContent(type="text", text="Error: Commit message cannot be empty")]
+
             try:
-                subprocess.run(["git", "add", "."], cwd=str(self.watch_dir), check=True)
+                # Check if there are changes to commit
+                status_result = subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=str(self.watch_dir),
+                    capture_output=True, text=True,
+                    timeout=10
+                )
+                if not status_result.stdout.strip():
+                    return [TextContent(type="text", text="No changes to commit")]
+
+                subprocess.run(["git", "add", "."], cwd=str(self.watch_dir), check=True, timeout=30)
                 result = subprocess.run(
                     ["git", "commit", "-m", message],
                     cwd=str(self.watch_dir),
-                    capture_output=True, text=True, check=True
+                    capture_output=True, text=True, check=True,
+                    timeout=30
                 )
                 commit_hash = result.stdout.split()[1] if "commit" in result.stdout else "unknown"
                 self.memory.remember(f"commit_{commit_hash}", message, "commits")
                 return [TextContent(type="text", text=f"Committed: {commit_hash}\n{message}")]
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Git commit failed: {e.stderr if e.stderr else e}")
+                return [TextContent(type="text", text=f"Commit failed: {e.stderr if e.stderr else str(e)}")]
             except Exception as e:
+                logger.error(f"Git commit error: {e}")
                 return [TextContent(type="text", text=f"Commit failed: {e}")]
 
         # ---------- GIT LOG ----------
         @self.server.set_tool_handler("git_log")
         async def git_log(args):
+            git_error = self._check_git_available()
+            if git_error:
+                return [TextContent(type="text", text=f"Error: {git_error}")]
+
             limit = args.get("limit", 5)
             try:
                 result = subprocess.run(
                     ["git", "log", f"-{limit}", "--oneline"],
                     cwd=str(self.watch_dir),
-                    capture_output=True, text=True
+                    capture_output=True, text=True,
+                    timeout=30
                 )
-                return [TextContent(type="text", text=result.stdout)]
+                log_output = result.stdout if result.stdout else "No commits yet"
+                return [TextContent(type="text", text=log_output)]
             except Exception as e:
+                logger.error(f"Git log failed: {e}")
                 return [TextContent(type="text", text=f"Git log error: {e}")]
 
         # ---------- LLM QUERY ----------
