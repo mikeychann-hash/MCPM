@@ -175,9 +175,8 @@ class FGDMCPServer:
             logger.warning(f"File watcher failed: {e}")
 
     def _start_approval_monitor(self):
-        """Start background task to monitor for approval files."""
-        asyncio.create_task(self._approval_monitor_loop())
-        logger.info("Approval monitor started")
+        """Will start background task to monitor for approval files in run() method."""
+        logger.info("Approval monitor will be started when event loop is ready")
 
     async def _approval_monitor_loop(self):
         """Background loop to check for approval files and auto-apply edits."""
@@ -589,6 +588,11 @@ class FGDMCPServer:
 
     async def run(self):
         logger.info("MCP Server starting...")
+
+        # Start approval monitor in the event loop context
+        asyncio.create_task(self._approval_monitor_loop())
+        logger.info("✅ Approval monitor started")
+
         async with stdio_server() as (read, write):
             await self.server.run(read, write, self.server.create_initialization_options())
 

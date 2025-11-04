@@ -16,6 +16,7 @@ import logging
 import traceback
 from datetime import datetime
 from dotenv import load_dotenv
+import threading
 
 # Set up logging to file AND console
 logging.basicConfig(
@@ -193,6 +194,36 @@ class FGDGUI(QWidget):
             logger.error(f"Error previewing file: {e}")
             self.preview.setPlainText(f"Error: {str(e)}")
 
+    def _read_subprocess_stdout(self):
+        """Background thread to read subprocess stdout and write to log file."""
+        try:
+            for line in self.process.stdout:
+                try:
+                    decoded = line.decode('utf-8', errors='replace')
+                    if self.log_file:
+                        with open(self.log_file, 'a') as f:
+                            f.write(decoded)
+                            f.flush()
+                except Exception as e:
+                    logger.error(f"Error writing stdout to log: {e}")
+        except Exception as e:
+            logger.debug(f"Stdout reader stopped: {e}")
+
+    def _read_subprocess_stderr(self):
+        """Background thread to read subprocess stderr and write to log file."""
+        try:
+            for line in self.process.stderr:
+                try:
+                    decoded = line.decode('utf-8', errors='replace')
+                    if self.log_file:
+                        with open(self.log_file, 'a') as f:
+                            f.write(decoded)
+                            f.flush()
+                except Exception as e:
+                    logger.error(f"Error writing stderr to log: {e}")
+        except Exception as e:
+            logger.debug(f"Stderr reader stopped: {e}")
+
     def toggle_server(self):
         if self.process and self.process.poll() is None:
             self.process.terminate()
@@ -239,6 +270,14 @@ class FGDGUI(QWidget):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
+
+        # Start background threads to read subprocess output
+        stdout_thread = threading.Thread(target=self._read_subprocess_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=self._read_subprocess_stderr, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        logger.info("Subprocess output monitoring threads started")
+
         self.status.setText(f"Server running: {provider}")
         self.start_btn.setText("Stop Server")
 
