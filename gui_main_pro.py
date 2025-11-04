@@ -233,7 +233,10 @@ class FGDGUI(QWidget):
         self.process = subprocess.Popen(
             [sys.executable, "mcp_backend.py", str(config_path)],
             cwd=dir_path,
-            env=env
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
         )
         self.status.setText(f"Server running: {provider}")
         self.start_btn.setText("Stop Server")
