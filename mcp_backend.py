@@ -12,6 +12,7 @@ import os
 import json
 import hashlib
 import logging
+import platform
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -66,9 +67,14 @@ class MemoryStore:
 
     def _save(self):
         try:
+            logger.debug(f"💾 Saving memory to: {self.memory_file.resolve()}")
             self.memory_file.write_text(json.dumps(self.memories, indent=2))
+            # Verify write succeeded
+            if self.memory_file.exists():
+                size = self.memory_file.stat().st_size
+                logger.debug(f"✅ Memory saved: {self.memory_file.resolve()} ({size} bytes)")
         except Exception as e:
-            logger.error(f"Memory save error: {e}")
+            logger.error(f"❌ Memory save error to {self.memory_file.resolve()}: {e}")
 
     def remember(self, key, value, category="general"):
         if category not in self.memories:
@@ -93,6 +99,7 @@ class MemoryStore:
         self.context.append({"type": type_, "data": data, "timestamp": datetime.now().isoformat()})
         if len(self.context) > self.limit:
             self.context = self.context[-self.limit:]
+        self._save()  # FIX: Persist context to disk immediately
 
     def get_context(self):
         return self.context
@@ -142,6 +149,9 @@ class FGDMCPServer:
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 
+        # Validate paths before using them
+        self._validate_paths()
+
         self.watch_dir = Path(self.config['watch_dir']).resolve()
         self.scan = self.config.get('scan', {})
         self.max_dir_size = self.scan.get('max_dir_size_gb', 2) * 1_073_741_824
@@ -160,6 +170,52 @@ class FGDMCPServer:
 
         self.server = Server("fgd-mcp-server")
         self._setup_handlers()
+
+    def _validate_paths(self):
+        """Validate paths and warn about OS mismatches"""
+        current_os = platform.system()
+        watch_dir_str = self.config.get('watch_dir', '')
+
+        # Check for Windows path patterns on non-Windows systems
+        is_windows_path = (
+            ':' in watch_dir_str and watch_dir_str[1:3] == ':\\' or
+            ':' in watch_dir_str and watch_dir_str[1:3] == ':/'
+        )
+
+        if is_windows_path and current_os != 'Windows':
+            logger.error("=" * 80)
+            logger.error("🚨 CRITICAL PATH CONFIGURATION ERROR 🚨")
+            logger.error("=" * 80)
+            logger.error(f"Running on: {current_os}")
+            logger.error(f"Config has Windows path: {watch_dir_str}")
+            logger.error("")
+            logger.error("This will cause ALL write operations to fail silently!")
+            logger.error("Files will be written to unexpected locations or not at all.")
+            logger.error("")
+            logger.error("To fix: Update fgd_config.yaml with the correct path for your OS:")
+            logger.error(f"  watch_dir: /home/user/your-project-directory")
+            logger.error("=" * 80)
+
+            # Try to resolve the path anyway and show where it would go
+            try:
+                resolved = Path(watch_dir_str).resolve()
+                logger.error(f"Path would resolve to: {resolved}")
+                if not resolved.exists():
+                    logger.error(f"⚠️  WARNING: This path does not exist!")
+            except Exception as e:
+                logger.error(f"⚠️  Path resolution failed: {e}")
+            logger.error("=" * 80)
+
+        # Check if path exists
+        try:
+            path = Path(watch_dir_str).resolve()
+            if not path.exists():
+                logger.warning("=" * 80)
+                logger.warning(f"⚠️  WARNING: watch_dir does not exist: {path}")
+                logger.warning("Write operations will fail until this directory is created.")
+                logger.warning("=" * 80)
+        except Exception as e:
+            logger.error(f"Failed to validate watch_dir: {e}")
 
     # ------------------------------------------------------------------- #
     # -------------------------- WATCHER -------------------------------- #
@@ -208,20 +264,30 @@ class FGDMCPServer:
                         backup = path.with_suffix('.bak')
                         if path.exists():
                             shutil.copy2(path, backup)
+                            logger.info(f"📝 Backup created: {backup.resolve()}")
 
                         # Write new content
+                        logger.info(f"✍️  Auto-applying edit to: {path.resolve()}")
                         path.write_text(new_content, encoding='utf-8')
+
+                        # Verify write succeeded
+                        if path.exists():
+                            size = path.stat().st_size
+                            logger.info(f"✅ Auto-edit verified: {path.resolve()} ({size} bytes)")
+                        else:
+                            logger.error(f"❌ Auto-edit failed: File does not exist after write")
 
                         self.memory.add_context("file_edit", {
                             "path": filepath,
                             "approved": True,
-                            "auto_applied": True
+                            "auto_applied": True,
+                            "resolved_path": str(path.resolve())
                         })
 
-                        logger.info(f"✅ Edit successfully applied: {filepath} (backup: {backup.name})")
+                        logger.info(f"✅ Edit successfully applied: {filepath} at {path.resolve()} (backup: {backup.name})")
 
                     except Exception as e:
-                        logger.error(f"❌ Failed to apply edit: {e}")
+                        logger.error(f"❌ Failed to apply edit to {filepath}: {e}")
 
                 else:
                     logger.info(f"❌ Edit rejected by user: {approval_data.get('filepath')}")
@@ -412,11 +478,24 @@ class FGDMCPServer:
                     backup = path.with_suffix('.bak')
                     if path.exists():
                         shutil.copy2(path, backup)
+                        logger.info(f"📝 Backup created: {backup.resolve()}")
                         self.memory.add_context("backup", {"path": str(backup), "original": filepath})
+
+                    # DEBUG: Log actual write location
+                    logger.info(f"✍️  Writing file to: {path.resolve()}")
                     path.write_text(content, encoding='utf-8')
-                    self.memory.add_context("file_write", {"path": filepath})
-                    return [TextContent(type="text", text=f"Written: {filepath}\nBackup: {backup.name}")]
+
+                    # Verify write succeeded
+                    if path.exists():
+                        size = path.stat().st_size
+                        logger.info(f"✅ Write verified: {path.resolve()} ({size} bytes)")
+                    else:
+                        logger.error(f"❌ Write failed: File does not exist after write: {path.resolve()}")
+
+                    self.memory.add_context("file_write", {"path": filepath, "resolved_path": str(path.resolve())})
+                    return [TextContent(type="text", text=f"Written: {filepath}\nActual location: {path.resolve()}\nBackup: {backup.name}")]
                 except Exception as e:
+                    logger.error(f"❌ Write error for {filepath}: {e}")
                     return [TextContent(type="text", text=f"Error: {e}")]
 
             # ---------- EDIT FILE ----------
@@ -448,10 +527,17 @@ class FGDMCPServer:
                         "timestamp": datetime.now().isoformat()
                     }
                     try:
+                        logger.info(f"💾 Saving pending edit to: {pending_edit_file.resolve()}")
                         pending_edit_file.write_text(json.dumps(pending_edit_data, indent=2))
-                        logger.info(f"Pending edit saved to {pending_edit_file}")
+
+                        # Verify write succeeded
+                        if pending_edit_file.exists():
+                            size = pending_edit_file.stat().st_size
+                            logger.info(f"✅ Pending edit saved: {pending_edit_file.resolve()} ({size} bytes)")
+                        else:
+                            logger.error(f"❌ Pending edit write failed: File does not exist after write")
                     except Exception as e:
-                        logger.error(f"Failed to save pending edit: {e}")
+                        logger.error(f"❌ Failed to save pending edit to {pending_edit_file.resolve()}: {e}")
 
                     return [TextContent(type="text", text=json.dumps({
                         "action": "confirm_edit",
@@ -466,16 +552,30 @@ class FGDMCPServer:
                     backup = path.with_suffix('.bak')
                     if path.exists():
                         shutil.copy2(path, backup)
+                        logger.info(f"📝 Backup created: {backup.resolve()}")
+
+                    # DEBUG: Log actual write location
+                    logger.info(f"✍️  Applying confirmed edit to: {path.resolve()}")
                     path.write_text(new_content, encoding='utf-8')
-                    self.memory.add_context("file_edit", {"path": filepath, "approved": True})
+
+                    # Verify write succeeded
+                    if path.exists():
+                        size = path.stat().st_size
+                        logger.info(f"✅ Edit applied and verified: {path.resolve()} ({size} bytes)")
+                    else:
+                        logger.error(f"❌ Edit failed: File does not exist after write: {path.resolve()}")
+
+                    self.memory.add_context("file_edit", {"path": filepath, "approved": True, "resolved_path": str(path.resolve())})
 
                     # Clean up pending edit file
                     pending_edit_file = self.watch_dir / ".fgd_pending_edit.json"
                     if pending_edit_file.exists():
                         pending_edit_file.unlink()
+                        logger.info(f"🧹 Cleaned up pending edit file")
 
-                    return [TextContent(type="text", text=f"✅ Approved! File updated + backup: {backup.name}")]
+                    return [TextContent(type="text", text=f"✅ Approved! File updated + backup: {backup.name}\nActual location: {path.resolve()}")]
                 except Exception as e:
+                    logger.error(f"❌ Edit error for {filepath}: {e}")
                     return [TextContent(type="text", text=f"Error: {e}")]
 
             # ---------- GIT DIFF ----------
