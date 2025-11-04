@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-MCPM v5.0 GUI – Full visual experience
+MCPM v5.0 GUI – Beautiful Modern Interface
 """
 
 from PyQt6.QtWidgets import *
-from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QFont, QTextCursor
+from PyQt6.QtCore import QTimer, Qt, QSize
+from PyQt6.QtGui import QFont, QTextCursor, QSyntaxHighlighter, QTextCharFormat, QColor, QPalette
 from pathlib import Path
 import sys
 import yaml
@@ -17,6 +17,7 @@ import traceback
 from datetime import datetime
 from dotenv import load_dotenv
 import threading
+import re
 
 # Set up logging to file AND console
 logging.basicConfig(
@@ -31,25 +32,138 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# --------------------------------------------------------------------------- #
+# -------------------------- SYNTAX HIGHLIGHTER ----------------------------- #
+# --------------------------------------------------------------------------- #
+class PythonHighlighter(QSyntaxHighlighter):
+    def __init__(self, document):
+        super().__init__(document)
+
+        # Define syntax highlighting rules
+        self.highlighting_rules = []
+
+        # Keywords
+        keyword_format = QTextCharFormat()
+        keyword_format.setForeground(QColor("#ff79c6"))
+        keyword_format.setFontWeight(QFont.Weight.Bold)
+        keywords = [
+            'def', 'class', 'import', 'from', 'if', 'elif', 'else', 'for',
+            'while', 'return', 'try', 'except', 'finally', 'with', 'as',
+            'async', 'await', 'yield', 'lambda', 'pass', 'break', 'continue'
+        ]
+        for word in keywords:
+            pattern = f'\\b{word}\\b'
+            self.highlighting_rules.append((re.compile(pattern), keyword_format))
+
+        # Strings
+        string_format = QTextCharFormat()
+        string_format.setForeground(QColor("#f1fa8c"))
+        self.highlighting_rules.append((re.compile(r'"[^"\\]*(\\.[^"\\]*)*"'), string_format))
+        self.highlighting_rules.append((re.compile(r"'[^'\\]*(\\.[^'\\]*)*'"), string_format))
+
+        # Comments
+        comment_format = QTextCharFormat()
+        comment_format.setForeground(QColor("#6272a4"))
+        comment_format.setFontItalic(True)
+        self.highlighting_rules.append((re.compile(r'#[^\n]*'), comment_format))
+
+        # Functions
+        function_format = QTextCharFormat()
+        function_format.setForeground(QColor("#50fa7b"))
+        self.highlighting_rules.append((re.compile(r'\b[A-Za-z_][A-Za-z0-9_]*(?=\()'), function_format))
+
+    def highlightBlock(self, text):
+        for pattern, fmt in self.highlighting_rules:
+            for match in pattern.finditer(text):
+                self.setFormat(match.start(), match.end() - match.start(), fmt)
+
+# --------------------------------------------------------------------------- #
+# -------------------------- POP-OUT WINDOWS -------------------------------- #
+# --------------------------------------------------------------------------- #
+class PopOutWindow(QWidget):
+    def __init__(self, title, content, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(1000, 700)
+
+        layout = QVBoxLayout()
+        self.setLayout(layout)
+
+        # Text editor
+        self.text_edit = QTextEdit()
+        self.text_edit.setReadOnly(True)
+        self.text_edit.setFont(QFont("Consolas", 11))
+        self.text_edit.setPlainText(content)
+
+        # Apply syntax highlighting for Python files
+        if title.endswith('.py'):
+            PythonHighlighter(self.text_edit.document())
+
+        layout.addWidget(self.text_edit)
+
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #667eea, stop:1 #764ba2);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 12px 24px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #7c8ff0, stop:1 #8a5cb8);
+            }
+        """)
+        layout.addWidget(close_btn)
+
+        self.apply_dark_mode()
+
+    def apply_dark_mode(self):
+        self.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #0f0c29, stop:0.5 #302b63, stop:1 #24243e);
+                color: #f0f6fc;
+            }
+            QTextEdit {
+                background: #0d1117;
+                color: #f0f6fc;
+                border: 2px solid #30363d;
+                border-radius: 8px;
+                padding: 12px;
+                font-size: 11pt;
+            }
+        """)
+
+# --------------------------------------------------------------------------- #
+# -------------------------- MAIN GUI --------------------------------------- #
+# --------------------------------------------------------------------------- #
 class FGDGUI(QWidget):
     def __init__(self):
         super().__init__()
         try:
-            self.setWindowTitle("MCPM v5.0 – AI Code Co‑Pilot")
-            self.resize(1200, 800)
+            self.setWindowTitle("MCPM v5.0 – AI Code Co‑Pilot 🚀")
+            self.resize(1600, 1000)
             self.layout = QVBoxLayout()
             self.setLayout(self.layout)
             self.process = None
             self.log_file = None
             self.pending_action = None
             self.pending_edit = None
+            self.pop_out_windows = []
 
             self._build_ui()
             self.timer = QTimer()
             self.timer.timeout.connect(self.update_logs)
             self.timer.start(1000)
 
-            self.apply_dark_mode(True)
+            self.apply_dark_mode()
             logger.info("GUI initialized successfully")
         except Exception as e:
             logger.error(f"GUI initialization failed: {e}")
@@ -58,98 +172,462 @@ class FGDGUI(QWidget):
             raise
 
     def _build_ui(self):
-        # Header
-        header = QLabel("MCPM v5.0 – AI Code Co‑Pilot")
+        # Header with gradient
+        header = QLabel("MCPM v5.0 – AI Code Co‑Pilot 🚀")
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setStyleSheet("font-size: 28px; font-weight: bold; margin: 20px; color: #667eea;")
+        header.setStyleSheet("""
+            font-size: 36px;
+            font-weight: bold;
+            margin: 30px;
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #667eea, stop:0.5 #764ba2, stop:1 #f093fb);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            color: #667eea;
+        """)
         self.layout.addWidget(header)
 
-        # Project Card
+        # Control Panel Card
+        control_card = self._create_control_panel()
+        self.layout.addWidget(control_card)
+
+        # Main Content Tabs
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 2px solid #30363d;
+                border-radius: 12px;
+                background: rgba(13, 17, 23, 0.6);
+                padding: 10px;
+            }
+            QTabBar::tab {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #30363d, stop:1 #21262d);
+                color: #f0f6fc;
+                padding: 12px 24px;
+                margin-right: 4px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QTabBar::tab:selected {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #667eea, stop:1 #764ba2);
+            }
+            QTabBar::tab:hover {
+                background: #30363d;
+            }
+        """)
+
+        # Tab 1: File Explorer & Preview
+        explorer_tab = self._create_explorer_tab()
+        self.tabs.addTab(explorer_tab, "📁 File Explorer")
+
+        # Tab 2: Diff Viewer
+        diff_tab = self._create_diff_tab()
+        self.tabs.addTab(diff_tab, "🔍 Diff Viewer")
+
+        # Tab 3: Logs
+        logs_tab = self._create_logs_tab()
+        self.tabs.addTab(logs_tab, "📋 Live Logs")
+
+        # Tab 4: Backups
+        backups_tab = self._create_backups_tab()
+        self.tabs.addTab(backups_tab, "💾 Backups")
+
+        self.layout.addWidget(self.tabs)
+
+    def _create_control_panel(self):
+        """Create beautiful control panel"""
         card = QWidget()
-        card.setStyleSheet(".card { background: rgba(255,255,255,0.1); border-radius: 16px; padding: 20px; margin: 10px; backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); }")
+        card.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 rgba(102, 126, 234, 0.15),
+                    stop:1 rgba(118, 75, 162, 0.15));
+                border-radius: 16px;
+                padding: 20px;
+                border: 2px solid rgba(102, 126, 234, 0.3);
+            }
+        """)
         card_layout = QVBoxLayout()
-        h = QHBoxLayout()
+
+        # Project Directory
+        dir_layout = QHBoxLayout()
+        dir_label = QLabel("📂 Project Directory:")
+        dir_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #50fa7b;")
         self.path_edit = QLineEdit()
+        self.path_edit.setStyleSheet("""
+            QLineEdit {
+                background: rgba(13, 17, 23, 0.8);
+                color: #f0f6fc;
+                border: 2px solid #30363d;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 13px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #667eea;
+            }
+        """)
         browse = QPushButton("Browse")
         browse.clicked.connect(self.browse)
-        h.addWidget(self.path_edit)
-        h.addWidget(browse)
-        card_layout.addWidget(QLabel("Project Directory"))
-        card_layout.addLayout(h)
+        browse.setStyleSheet(self._button_style())
+        dir_layout.addWidget(dir_label)
+        dir_layout.addWidget(self.path_edit)
+        dir_layout.addWidget(browse)
+        card_layout.addLayout(dir_layout)
 
+        # Provider and Controls
+        controls_layout = QHBoxLayout()
+
+        provider_label = QLabel("🤖 LLM Provider:")
+        provider_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #50fa7b;")
         self.provider = QComboBox()
         self.provider.addItems(["grok", "openai", "claude", "ollama"])
         self.provider.setCurrentText("grok")
-        card_layout.addWidget(QLabel("LLM Provider"))
-        card_layout.addWidget(self.provider)
+        self.provider.setStyleSheet("""
+            QComboBox {
+                background: rgba(13, 17, 23, 0.8);
+                color: #f0f6fc;
+                border: 2px solid #30363d;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 13px;
+            }
+            QComboBox:hover {
+                border: 2px solid #667eea;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background: #0d1117;
+                color: #f0f6fc;
+                selection-background-color: #667eea;
+            }
+        """)
 
-        self.start_btn = QPushButton("Start Server")
+        self.start_btn = QPushButton("▶ Start Server")
         self.start_btn.clicked.connect(self.toggle_server)
-        card_layout.addWidget(self.start_btn)
+        self.start_btn.setStyleSheet(self._button_style("#50fa7b", "#5fff8a"))
+        self.start_btn.setMinimumHeight(50)
 
-        self.status = QLabel("Status: Ready")
-        self.status.setStyleSheet("color: #50fa7b; font-weight: bold;")
-        card_layout.addWidget(self.status)
+        self.status = QLabel("🟢 Status: Ready")
+        self.status.setStyleSheet("color: #50fa7b; font-weight: bold; font-size: 14px;")
+
+        controls_layout.addWidget(provider_label)
+        controls_layout.addWidget(self.provider)
+        controls_layout.addWidget(self.start_btn)
+        controls_layout.addWidget(self.status)
+        card_layout.addLayout(controls_layout)
 
         card.setLayout(card_layout)
-        self.layout.addWidget(card)
+        return card
 
-        # Split: Tree + Preview
+    def _create_explorer_tab(self):
+        """Create file explorer tab with larger preview"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+
         split = QSplitter()
+        split.setOrientation(Qt.Orientation.Horizontal)
+
+        # File Tree
+        tree_widget = QWidget()
+        tree_layout = QVBoxLayout()
+        tree_header = QHBoxLayout()
+        tree_label = QLabel("📁 File Tree")
+        tree_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #667eea;")
+        tree_header.addWidget(tree_label)
+        tree_layout.addLayout(tree_header)
+
         self.tree = QTreeWidget()
         self.tree.setHeaderLabel("Files")
         self.tree.itemClicked.connect(self.on_file_click)
+        self.tree.setStyleSheet("""
+            QTreeWidget {
+                background: #0d1117;
+                color: #f0f6fc;
+                border: 2px solid #30363d;
+                border-radius: 8px;
+                font-size: 13px;
+                padding: 8px;
+            }
+            QTreeWidget::item {
+                padding: 6px;
+            }
+            QTreeWidget::item:selected {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #667eea, stop:1 #764ba2);
+            }
+            QTreeWidget::item:hover {
+                background: #21262d;
+            }
+        """)
+        tree_layout.addWidget(self.tree)
+        tree_widget.setLayout(tree_layout)
+
+        # Code Preview
+        preview_widget = QWidget()
+        preview_layout = QVBoxLayout()
+        preview_header = QHBoxLayout()
+        preview_label = QLabel("📄 Code Preview")
+        preview_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #667eea;")
+        pop_out_btn = QPushButton("🔍 Pop Out")
+        pop_out_btn.clicked.connect(self.pop_out_preview)
+        pop_out_btn.setStyleSheet(self._button_style())
+        preview_header.addWidget(preview_label)
+        preview_header.addStretch()
+        preview_header.addWidget(pop_out_btn)
+        preview_layout.addLayout(preview_header)
+
         self.preview = QTextEdit()
         self.preview.setReadOnly(True)
-        self.preview.setFont(QFont("Consolas", 10))
-        split.addWidget(self.tree)
-        split.addWidget(self.preview)
-        split.setSizes([300, 700])
-        self.layout.addWidget(split)
+        self.preview.setFont(QFont("Consolas", 11))
+        self.preview.setStyleSheet("""
+            QTextEdit {
+                background: #0d1117;
+                color: #f0f6fc;
+                border: 2px solid #30363d;
+                border-radius: 8px;
+                padding: 12px;
+                font-size: 11pt;
+                line-height: 1.5;
+            }
+        """)
+        self.preview_highlighter = PythonHighlighter(self.preview.document())
+        preview_layout.addWidget(self.preview)
+        preview_widget.setLayout(preview_layout)
+
+        split.addWidget(tree_widget)
+        split.addWidget(preview_widget)
+        split.setSizes([400, 1100])  # Much larger preview
+
+        layout.addWidget(split)
+        widget.setLayout(layout)
+        return widget
+
+    def _create_diff_tab(self):
+        """Create beautiful diff viewer tab"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+
+        # Header
+        header = QHBoxLayout()
+        diff_label = QLabel("🔍 Pending Edit Review")
+        diff_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #667eea;")
+        pop_out_btn = QPushButton("🔍 Pop Out")
+        pop_out_btn.clicked.connect(self.pop_out_diff)
+        pop_out_btn.setStyleSheet(self._button_style())
+        header.addWidget(diff_label)
+        header.addStretch()
+        header.addWidget(pop_out_btn)
+        layout.addLayout(header)
 
         # Diff Viewer
         self.diff_view = QTextEdit()
         self.diff_view.setReadOnly(True)
-        self.diff_view.setFont(QFont("Consolas", 10))
-        self.layout.addWidget(QLabel("Diff Preview"))
-        self.layout.addWidget(self.diff_view)
+        self.diff_view.setFont(QFont("Consolas", 12))
+        self.diff_view.setStyleSheet("""
+            QTextEdit {
+                background: #0d1117;
+                color: #f0f6fc;
+                border: 2px solid #30363d;
+                border-radius: 8px;
+                padding: 16px;
+                font-size: 12pt;
+                line-height: 1.6;
+            }
+        """)
+        layout.addWidget(self.diff_view)
 
+        # Approve/Reject Buttons
         btns = QHBoxLayout()
-        self.approve_btn = QPushButton("Approve")
+        self.approve_btn = QPushButton("✅ Approve Changes")
         self.approve_btn.clicked.connect(self.approve_edit)
-        self.reject_btn = QPushButton("Reject")
+        self.approve_btn.setStyleSheet(self._button_style("#50fa7b", "#5fff8a"))
+        self.approve_btn.setMinimumHeight(50)
+
+        self.reject_btn = QPushButton("❌ Reject Changes")
         self.reject_btn.clicked.connect(self.reject_edit)
+        self.reject_btn.setStyleSheet(self._button_style("#ff5555", "#ff6e6e"))
+        self.reject_btn.setMinimumHeight(50)
+
         btns.addWidget(self.approve_btn)
         btns.addWidget(self.reject_btn)
-        self.layout.addLayout(btns)
+        layout.addLayout(btns)
 
-        # Backups
-        self.backup_list = QListWidget()
-        self.layout.addWidget(QLabel("Backups"))
-        self.layout.addWidget(self.backup_list)
+        widget.setLayout(layout)
+        return widget
 
-        # Logs
-        log_card = QWidget()
-        log_layout = QVBoxLayout()
-        log_layout.addWidget(QLabel("Live Logs"))
+    def _create_logs_tab(self):
+        """Create logs viewer tab"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+
+        # Header
+        header = QHBoxLayout()
+        log_label = QLabel("📋 Live Server Logs")
+        log_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #667eea;")
+        pop_out_btn = QPushButton("🔍 Pop Out")
+        pop_out_btn.clicked.connect(self.pop_out_logs)
+        pop_out_btn.setStyleSheet(self._button_style())
+        header.addWidget(log_label)
+        header.addStretch()
+        header.addWidget(pop_out_btn)
+        layout.addLayout(header)
+
+        # Filters
         filters = QHBoxLayout()
+        level_label = QLabel("Level:")
+        level_label.setStyleSheet("color: #50fa7b; font-weight: bold;")
         self.level = QComboBox()
         self.level.addItems(["All", "INFO", "WARNING", "ERROR"])
-        filters.addWidget(QLabel("Level:"))
-        filters.addWidget(self.level)
+        self.level.setStyleSheet("""
+            QComboBox {
+                background: rgba(13, 17, 23, 0.8);
+                color: #f0f6fc;
+                border: 2px solid #30363d;
+                border-radius: 8px;
+                padding: 8px;
+            }
+            QComboBox QAbstractItemView {
+                background: #0d1117;
+                color: #f0f6fc;
+                selection-background-color: #667eea;
+            }
+        """)
+
+        search_label = QLabel("Search:")
+        search_label.setStyleSheet("color: #50fa7b; font-weight: bold;")
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search...")
-        filters.addWidget(self.search)
-        clear = QPushButton("Clear")
+        self.search.setPlaceholderText("Search logs...")
+        self.search.setStyleSheet("""
+            QLineEdit {
+                background: rgba(13, 17, 23, 0.8);
+                color: #f0f6fc;
+                border: 2px solid #30363d;
+                border-radius: 8px;
+                padding: 8px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #667eea;
+            }
+        """)
+
+        clear = QPushButton("Clear Filters")
         clear.clicked.connect(self.clear_filters)
+        clear.setStyleSheet(self._button_style())
+
+        filters.addWidget(level_label)
+        filters.addWidget(self.level)
+        filters.addWidget(search_label)
+        filters.addWidget(self.search)
         filters.addWidget(clear)
-        log_layout.addLayout(filters)
+        layout.addLayout(filters)
+
+        # Log Viewer
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setFont(QFont("Consolas", 10))
-        log_layout.addWidget(self.log_view)
-        log_card.setLayout(log_layout)
-        self.layout.addWidget(log_card)
+        self.log_view.setFont(QFont("Consolas", 11))
+        self.log_view.setStyleSheet("""
+            QTextEdit {
+                background: #0d1117;
+                color: #f0f6fc;
+                border: 2px solid #30363d;
+                border-radius: 8px;
+                padding: 12px;
+                font-size: 11pt;
+            }
+        """)
+        layout.addWidget(self.log_view)
+
+        widget.setLayout(layout)
+        return widget
+
+    def _create_backups_tab(self):
+        """Create backups viewer tab"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+
+        backup_label = QLabel("💾 File Backups")
+        backup_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #667eea;")
+        layout.addWidget(backup_label)
+
+        self.backup_list = QListWidget()
+        self.backup_list.setStyleSheet("""
+            QListWidget {
+                background: #0d1117;
+                color: #f0f6fc;
+                border: 2px solid #30363d;
+                border-radius: 8px;
+                padding: 12px;
+                font-size: 13px;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-radius: 4px;
+            }
+            QListWidget::item:selected {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #667eea, stop:1 #764ba2);
+            }
+            QListWidget::item:hover {
+                background: #21262d;
+            }
+        """)
+        layout.addWidget(self.backup_list)
+
+        widget.setLayout(layout)
+        return widget
+
+    def _button_style(self, color1="#667eea", color2="#764ba2"):
+        """Return button stylesheet with gradient"""
+        return f"""
+            QPushButton {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {color1}, stop:1 {color2});
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 10px 20px;
+                font-size: 14px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 {color2}, stop:1 {color1});
+            }}
+            QPushButton:pressed {{
+                padding: 12px 18px 8px 22px;
+            }}
+        """
+
+    def pop_out_preview(self):
+        """Pop out preview window"""
+        content = self.preview.toPlainText()
+        if content:
+            window = PopOutWindow("Code Preview", content, self)
+            window.show()
+            self.pop_out_windows.append(window)
+
+    def pop_out_diff(self):
+        """Pop out diff window"""
+        content = self.diff_view.toPlainText()
+        if content:
+            window = PopOutWindow("Diff Viewer", content, self)
+            window.show()
+            self.pop_out_windows.append(window)
+
+    def pop_out_logs(self):
+        """Pop out logs window"""
+        content = self.log_view.toPlainText()
+        if content:
+            window = PopOutWindow("Live Logs", content, self)
+            window.show()
+            self.pop_out_windows.append(window)
 
     def browse(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Project")
@@ -170,7 +648,7 @@ class FGDGUI(QWidget):
                 if p.name.startswith('.') or p.name in ['node_modules', '__pycache__']:
                     continue
                 item = QTreeWidgetItem([p.name])
-                item.setData(0, Qt.ItemDataRole.UserRole, str(p))  # Store full path
+                item.setData(0, Qt.ItemDataRole.UserRole, str(p))
                 parent.addChild(item)
                 if p.is_dir():
                     self._add_tree_items(item, p)
@@ -182,7 +660,7 @@ class FGDGUI(QWidget):
             file_path = item.data(0, Qt.ItemDataRole.UserRole)
             if file_path and Path(file_path).is_file():
                 path = Path(file_path)
-                if path.stat().st_size > 500_000:  # 500KB limit
+                if path.stat().st_size > 500_000:
                     self.preview.setPlainText(f"File too large to preview: {path.stat().st_size / 1024:.1f} KB")
                     return
                 try:
@@ -227,15 +705,15 @@ class FGDGUI(QWidget):
     def toggle_server(self):
         if self.process and self.process.poll() is None:
             self.process.terminate()
-            self.status.setText("Status: Stopped")
-            self.start_btn.setText("Start Server")
+            self.status.setText("🔴 Status: Stopped")
+            self.start_btn.setText("▶ Start Server")
         else:
             self.start_server()
 
     def start_server(self):
         dir_path = self.path_edit.text().strip()
         if not dir_path or not Path(dir_path).exists():
-            self.status.setText("Invalid directory")
+            self.status.setText("🔴 Invalid directory")
             return
 
         provider = self.provider.currentText()
@@ -278,8 +756,8 @@ class FGDGUI(QWidget):
         stderr_thread.start()
         logger.info("Subprocess output monitoring threads started")
 
-        self.status.setText(f"Server running: {provider}")
-        self.start_btn.setText("Stop Server")
+        self.status.setText(f"🟢 Server running: {provider}")
+        self.start_btn.setText("⏹ Stop Server")
 
     def update_logs(self):
         if not self.log_file or not self.log_file.exists():
@@ -302,11 +780,13 @@ class FGDGUI(QWidget):
                 cursor.movePosition(QTextCursor.MoveOperation.End)
                 self.log_view.setTextCursor(cursor)
                 if "ERROR" in line:
-                    self.log_view.setTextColor(Qt.GlobalColor.red)
+                    self.log_view.setTextColor(QColor("#ff5555"))
                 elif "WARNING" in line:
-                    self.log_view.setTextColor(Qt.GlobalColor.yellow)
+                    self.log_view.setTextColor(QColor("#f1fa8c"))
+                elif "✅" in line or "SUCCESS" in line:
+                    self.log_view.setTextColor(QColor("#50fa7b"))
                 else:
-                    self.log_view.setTextColor(Qt.GlobalColor.white)
+                    self.log_view.setTextColor(QColor("#f0f6fc"))
                 self.log_view.insertPlainText(line + "\n")
 
             # Check for pending edits
@@ -334,31 +814,36 @@ class FGDGUI(QWidget):
 
             self.pending_edit = pending_data
 
-            # Display diff in the diff viewer
+            # Display diff in the diff viewer with better formatting
             diff_text = f"""
-📝 PENDING EDIT: {pending_data['filepath']}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  🔍 PENDING EDIT: {pending_data['filepath']}
+╚══════════════════════════════════════════════════════════════════════════════╝
 
-🔴 OLD TEXT:
+┌─ 🔴 OLD TEXT ────────────────────────────────────────────────────────────────┐
 {pending_data['old_text']}
+└──────────────────────────────────────────────────────────────────────────────┘
 
-🟢 NEW TEXT:
+┌─ 🟢 NEW TEXT ────────────────────────────────────────────────────────────────┐
 {pending_data['new_text']}
+└──────────────────────────────────────────────────────────────────────────────┘
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📄 PREVIEW (first 500 chars):
+┌─ 📄 PREVIEW (first 500 chars) ───────────────────────────────────────────────┐
 {pending_data['preview']}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+└──────────────────────────────────────────────────────────────────────────────┘
 
 ⏱️  Timestamp: {pending_data['timestamp']}
 
-Click "Approve" to apply changes or "Reject" to cancel.
+👉 Review the changes above and click "Approve" or "Reject" below.
 """
             self.diff_view.setPlainText(diff_text)
 
-            # Highlight approve button
-            self.approve_btn.setStyleSheet("background-color: #00ff00; color: #000; font-weight: bold;")
-            self.reject_btn.setStyleSheet("background-color: #ff0000; color: #fff; font-weight: bold;")
+            # Switch to diff tab and highlight buttons
+            self.tabs.setCurrentIndex(1)
+            self.approve_btn.setStyleSheet(self._button_style("#50fa7b", "#5fff8a") +
+                "QPushButton { animation: pulse 2s infinite; font-size: 16px; }")
+            self.reject_btn.setStyleSheet(self._button_style("#ff5555", "#ff6e6e") +
+                "QPushButton { font-size: 16px; }")
 
             logger.info(f"Pending edit detected: {pending_data['filepath']}")
 
@@ -394,13 +879,13 @@ Click "Approve" to apply changes or "Reject" to cancel.
                     pending_file.unlink()
 
                 logger.info(f"✅ Edit APPROVED for: {self.pending_edit.get('filepath')}")
-                QMessageBox.information(self, "Edit Approved",
-                    f"✅ Changes approved!\n\nFile: {self.pending_edit['filepath']}\n\nThe backend will apply the changes.")
+                QMessageBox.information(self, "✅ Edit Approved",
+                    f"✅ Changes approved!\n\nFile: {self.pending_edit['filepath']}\n\nThe backend will apply the changes automatically.")
 
                 # Clear display
                 self.diff_view.clear()
-                self.approve_btn.setStyleSheet("")
-                self.reject_btn.setStyleSheet("")
+                self.approve_btn.setStyleSheet(self._button_style("#50fa7b", "#5fff8a"))
+                self.reject_btn.setStyleSheet(self._button_style("#ff5555", "#ff6e6e"))
                 self.pending_edit = None
             else:
                 QMessageBox.information(self, "No Pending Edit", "There are no pending edits to approve.")
@@ -433,13 +918,13 @@ Click "Approve" to apply changes or "Reject" to cancel.
                     pending_file.unlink()
 
                 logger.info(f"❌ Edit REJECTED for: {self.pending_edit.get('filepath')}")
-                QMessageBox.information(self, "Edit Rejected",
+                QMessageBox.information(self, "❌ Edit Rejected",
                     f"❌ Changes rejected!\n\nFile: {self.pending_edit['filepath']}\n\nNo changes will be made.")
 
                 # Clear display
                 self.diff_view.clear()
-                self.approve_btn.setStyleSheet("")
-                self.reject_btn.setStyleSheet("")
+                self.approve_btn.setStyleSheet(self._button_style("#50fa7b", "#5fff8a"))
+                self.reject_btn.setStyleSheet(self._button_style("#ff5555", "#ff6e6e"))
                 self.pending_edit = None
             else:
                 QMessageBox.information(self, "No Pending Edit", "There are no pending edits to reject.")
@@ -448,15 +933,36 @@ Click "Approve" to apply changes or "Reject" to cancel.
             logger.error(traceback.format_exc())
             QMessageBox.warning(self, "Error", f"Failed to reject edit: {str(e)}")
 
-    def apply_dark_mode(self, dark):
-        if dark:
-            self.setStyleSheet("background:#0d1117; color:#f0f6fc; QTextEdit {background:#010409;}")
-        else:
-            self.setStyleSheet("background:#f7f9fc; color:#24292f; QTextEdit {background:#f6f8fa;}")
+    def apply_dark_mode(self):
+        self.setStyleSheet("""
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #0f0c29, stop:0.3 #302b63, stop:0.7 #24243e, stop:1 #0f0c29);
+                color: #f0f6fc;
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }
+            QMessageBox {
+                background: #0d1117;
+            }
+            QScrollBar:vertical {
+                background: #0d1117;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: #667eea;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #764ba2;
+            }
+        """)
 
     def closeEvent(self, event):
         if self.process:
             self.process.terminate()
+        for window in self.pop_out_windows:
+            window.close()
         event.accept()
 
 if __name__ == "__main__":
@@ -470,7 +976,6 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Fatal error: {e}")
         logger.critical(traceback.format_exc())
-        # Show error dialog if possible
         try:
             QMessageBox.critical(None, "Fatal Error",
                 f"Application failed to start:\n{str(e)}\n\nCheck mcpm_gui.log for details.\n\nPress OK to exit.")
