@@ -172,50 +172,93 @@ class FGDMCPServer:
         self._setup_handlers()
 
     def _validate_paths(self):
-        """Validate paths and warn about OS mismatches"""
+        """Validate Windows-only paths and prevent Linux directory access"""
         current_os = platform.system()
         watch_dir_str = self.config.get('watch_dir', '')
 
-        # Check for Windows path patterns on non-Windows systems
+        # CRITICAL: This server is Windows-only
+        if current_os != 'Windows':
+            logger.error("=" * 80)
+            logger.error("🚨 CRITICAL ERROR: WINDOWS-ONLY SERVER 🚨")
+            logger.error("=" * 80)
+            logger.error(f"Current OS detected: {current_os}")
+            logger.error("")
+            logger.error("MCPM is designed to run on Windows ONLY.")
+            logger.error("Running on non-Windows systems is not supported and will cause:")
+            logger.error("  • Silent write failures")
+            logger.error("  • Path resolution errors")
+            logger.error("  • Potential data corruption")
+            logger.error("  • Security issues accessing incorrect directories")
+            logger.error("")
+            logger.error("This server will now EXIT to prevent filesystem damage.")
+            logger.error("=" * 80)
+            raise SystemExit("MCPM requires Windows. Exiting to prevent filesystem issues.")
+
+        # Validate Windows path format
         is_windows_path = (
-            ':' in watch_dir_str and watch_dir_str[1:3] == ':\\' or
-            ':' in watch_dir_str and watch_dir_str[1:3] == ':/'
+            ':' in watch_dir_str and
+            len(watch_dir_str) >= 3 and
+            watch_dir_str[1] == ':' and
+            (watch_dir_str[2] == '\\' or watch_dir_str[2] == '/')
         )
 
-        if is_windows_path and current_os != 'Windows':
+        if not is_windows_path:
             logger.error("=" * 80)
-            logger.error("🚨 CRITICAL PATH CONFIGURATION ERROR 🚨")
+            logger.error("🚨 INVALID PATH FORMAT 🚨")
             logger.error("=" * 80)
-            logger.error(f"Running on: {current_os}")
-            logger.error(f"Config has Windows path: {watch_dir_str}")
+            logger.error(f"Configured path: {watch_dir_str}")
             logger.error("")
-            logger.error("This will cause ALL write operations to fail silently!")
-            logger.error("Files will be written to unexpected locations or not at all.")
+            logger.error("MCPM requires Windows absolute paths (e.g., C:\\Users\\...)")
+            logger.error("Linux/Unix paths (starting with /) are NOT allowed.")
             logger.error("")
-            logger.error("To fix: Update fgd_config.yaml with the correct path for your OS:")
-            logger.error(f"  watch_dir: /home/user/your-project-directory")
+            logger.error("Example valid path:")
+            logger.error("  watch_dir: C:\\Users\\Admin\\Desktop\\YourProject")
             logger.error("=" * 80)
+            raise SystemExit("Invalid path format. Must be Windows path (e.g., C:\\Users\\...)")
 
-            # Try to resolve the path anyway and show where it would go
-            try:
-                resolved = Path(watch_dir_str).resolve()
-                logger.error(f"Path would resolve to: {resolved}")
-                if not resolved.exists():
-                    logger.error(f"⚠️  WARNING: This path does not exist!")
-            except Exception as e:
-                logger.error(f"⚠️  Path resolution failed: {e}")
+        # Block Linux paths explicitly
+        if watch_dir_str.startswith('/'):
             logger.error("=" * 80)
+            logger.error("🚨 SECURITY ERROR: LINUX PATH DETECTED 🚨")
+            logger.error("=" * 80)
+            logger.error(f"Attempted path: {watch_dir_str}")
+            logger.error("")
+            logger.error("Linux paths are explicitly BLOCKED in this Windows-only server.")
+            logger.error("This prevents accidental access to WSL or network paths.")
+            logger.error("")
+            logger.error("Use Windows paths only: C:\\Users\\YourName\\YourProject")
+            logger.error("=" * 80)
+            raise SystemExit("Linux paths are not allowed. Use Windows paths only.")
 
-        # Check if path exists
+        # Validate path exists
         try:
             path = Path(watch_dir_str).resolve()
+            logger.info(f"✅ Windows path validated: {path}")
+
             if not path.exists():
-                logger.warning("=" * 80)
-                logger.warning(f"⚠️  WARNING: watch_dir does not exist: {path}")
-                logger.warning("Write operations will fail until this directory is created.")
-                logger.warning("=" * 80)
+                logger.error("=" * 80)
+                logger.error(f"⚠️  ERROR: watch_dir does not exist: {path}")
+                logger.error("Please create this directory before starting the server.")
+                logger.error("=" * 80)
+                raise SystemExit(f"Directory does not exist: {path}")
+
+            # Verify it's actually a Windows path (drive letter present)
+            if not path.drive:
+                logger.error("=" * 80)
+                logger.error("🚨 PATH VALIDATION FAILED 🚨")
+                logger.error(f"Path has no Windows drive letter: {path}")
+                logger.error("This may indicate an invalid or relative path.")
+                logger.error("=" * 80)
+                raise SystemExit("Path must include Windows drive letter (C:, D:, etc.)")
+
+            logger.info(f"✅ Drive letter detected: {path.drive}")
+            logger.info(f"✅ Full resolved path: {path}")
+
+        except SystemExit:
+            raise
         except Exception as e:
-            logger.error(f"Failed to validate watch_dir: {e}")
+            logger.error(f"❌ Path validation failed: {e}")
+            raise SystemExit(f"Failed to validate watch_dir: {e}")
 
     # ------------------------------------------------------------------- #
     # -------------------------- WATCHER -------------------------------- #
