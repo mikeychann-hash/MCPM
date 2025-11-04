@@ -302,187 +302,188 @@ class FGDMCPServer:
                 })
             ]
 
-        # ---------- LIST DIRECTORY ----------
-        @self.server.set_tool_handler("list_directory")
-        async def list_directory(args):
-            rel_path = args.get("path", ".")
-            path = self._sanitize(rel_path)
-            if not path.is_dir():
-                return [TextContent(type="text", text="Error: Not a directory")]
-            patterns = self._get_gitignore_patterns(self.watch_dir)
-            files = []
-            for p in path.iterdir():
-                if p.name.startswith('.') or self._matches_gitignore(p, patterns):
-                    continue
-                files.append({
-                    "name": p.name,
-                    "is_dir": p.is_dir(),
-                    "size": p.stat().st_size if p.is_file() else 0
-                })
-            return [TextContent(type="text", text=json.dumps({"files": files}, indent=2))]
+        # ---------- TOOL CALL DISPATCHER ----------
+        @self.server.call_tool()
+        async def call_tool(name: str, arguments: dict):
+            """Handle all tool calls with a dispatcher pattern"""
 
-        # ---------- READ FILE ----------
-        @self.server.set_tool_handler("read_file")
-        async def read_file(args):
-            try:
-                path = self._sanitize(args["filepath"])
-                if path.stat().st_size > self.max_file_kb:
-                    return [TextContent(type="text", text="Error: File too large (>250KB)")]
+            # ---------- LIST DIRECTORY ----------
+            if name == "list_directory":
+                rel_path = arguments.get("path", ".")
+                path = self._sanitize(rel_path)
+                if not path.is_dir():
+                    return [TextContent(type="text", text="Error: Not a directory")]
+                patterns = self._get_gitignore_patterns(self.watch_dir)
+                files = []
+                for p in path.iterdir():
+                    if p.name.startswith('.') or self._matches_gitignore(p, patterns):
+                        continue
+                    files.append({
+                        "name": p.name,
+                        "is_dir": p.is_dir(),
+                        "size": p.stat().st_size if p.is_file() else 0
+                    })
+                return [TextContent(type="text", text=json.dumps({"files": files}, indent=2))]
+
+            # ---------- READ FILE ----------
+            elif name == "read_file":
+                try:
+                    path = self._sanitize(arguments["filepath"])
+                    if path.stat().st_size > self.max_file_kb:
+                        return [TextContent(type="text", text="Error: File too large (>250KB)")]
+                    content = path.read_text(encoding='utf-8')
+                    stat = path.stat()
+                    meta = {
+                        "size_kb": round(stat.st_size / 1024, 2),
+                        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        "lines": len(content.splitlines())
+                    }
+                    self.memory.add_context("file_read", {"path": arguments["filepath"], "meta": meta})
+                    return [TextContent(type="text", text=json.dumps({"content": content, "meta": meta}, indent=2))]
+                except Exception as e:
+                    return [TextContent(type="text", text=f"Error: {e}")]
+
+            # ---------- WRITE FILE ----------
+            elif name == "write_file":
+                filepath = arguments["filepath"]
+                content = arguments["content"]
+                path = self._sanitize(filepath)
+
+                try:
+                    backup = path.with_suffix('.bak')
+                    if path.exists():
+                        shutil.copy2(path, backup)
+                        self.memory.add_context("backup", {"path": str(backup), "original": filepath})
+                    path.write_text(content, encoding='utf-8')
+                    self.memory.add_context("file_write", {"path": filepath})
+                    return [TextContent(type="text", text=f"Written: {filepath}\nBackup: {backup.name}")]
+                except Exception as e:
+                    return [TextContent(type="text", text=f"Error: {e}")]
+
+            # ---------- EDIT FILE ----------
+            elif name == "edit_file":
+                filepath = arguments["filepath"]
+                old_text = arguments["old_text"]
+                new_text = arguments["new_text"]
+                confirm = arguments.get("confirm", False)
+                path = self._sanitize(filepath)
+
+                if not path.exists():
+                    return [TextContent(type="text", text="File not found")]
+
                 content = path.read_text(encoding='utf-8')
-                stat = path.stat()
-                meta = {
-                    "size_kb": round(stat.st_size / 1024, 2),
-                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                    "lines": len(content.splitlines())
-                }
-                self.memory.add_context("file_read", {"path": args["filepath"], "meta": meta})
-                return [TextContent(type="text", text=json.dumps({"content": content, "meta": meta}, indent=2))]
-            except Exception as e:
-                return [TextContent(type="text", text=f"Error: {e}")]
+                if old_text not in content:
+                    return [TextContent(type="text", text="Old text not found")]
 
-        # ---------- WRITE FILE ----------
-        @self.server.set_tool_handler("write_file")
-        async def write_file(args):
-            filepath = args["filepath"]
-            content = args["content"]
-            path = self._sanitize(filepath)
+                if not confirm:
+                    preview = content.replace(old_text, new_text, 1)
+                    return [TextContent(type="text", text=json.dumps({
+                        "action": "confirm_edit",
+                        "filepath": filepath,
+                        "diff": f"- {old_text}\n+ {new_text}",
+                        "preview": preview[:500]
+                    }, indent=2))]
 
-            try:
-                backup = path.with_suffix('.bak')
-                if path.exists():
+                try:
+                    new_content = content.replace(old_text, new_text, 1)
+                    backup = path.with_suffix('.bak')
                     shutil.copy2(path, backup)
-                    self.memory.add_context("backup", {"path": str(backup), "original": filepath})
-                path.write_text(content, encoding='utf-8')
-                self.memory.add_context("file_write", {"path": filepath})
-                return [TextContent(type="text", text=f"Written: {filepath}\nBackup: {backup.name}")]
-            except Exception as e:
-                return [TextContent(type="text", text=f"Error: {e}")]
+                    path.write_text(new_content, encoding='utf-8')
+                    self.memory.add_context("file_edit", {"path": filepath})
+                    return [TextContent(type="text", text=f"Approved! File updated + backup: {backup.name}")]
+                except Exception as e:
+                    return [TextContent(type="text", text=f"Error: {e}")]
 
-        # ---------- EDIT FILE ----------
-        @self.server.set_tool_handler("edit_file")
-        async def edit_file(args):
-            filepath = args["filepath"]
-            old_text = args["old_text"]
-            new_text = args["new_text"]
-            confirm = args.get("confirm", False)
-            path = self._sanitize(filepath)
+            # ---------- GIT DIFF ----------
+            elif name == "git_diff":
+                git_error = self._check_git_available()
+                if git_error:
+                    return [TextContent(type="text", text=f"Error: {git_error}")]
 
-            if not path.exists():
-                return [TextContent(type="text", text="File not found")]
+                files = arguments.get("files", [])
+                try:
+                    result = subprocess.run(
+                        ["git", "diff", "--", *files],
+                        cwd=str(self.watch_dir),
+                        capture_output=True, text=True,
+                        timeout=30
+                    )
+                    diff = result.stdout or "No changes"
+                    self.memory.remember(f"diff_{datetime.now().isoformat()}", diff, "git_diffs")
+                    return [TextContent(type="text", text=diff)]
+                except Exception as e:
+                    logger.error(f"Git diff failed: {e}")
+                    return [TextContent(type="text", text=f"Git error: {e}")]
 
-            content = path.read_text(encoding='utf-8')
-            if old_text not in content:
-                return [TextContent(type="text", text="Old text not found")]
+            # ---------- GIT COMMIT ----------
+            elif name == "git_commit":
+                git_error = self._check_git_available()
+                if git_error:
+                    return [TextContent(type="text", text=f"Error: {git_error}")]
 
-            if not confirm:
-                preview = content.replace(old_text, new_text, 1)
-                return [TextContent(type="text", text=json.dumps({
-                    "action": "confirm_edit",
-                    "filepath": filepath,
-                    "diff": f"- {old_text}\n+ {new_text}",
-                    "preview": preview[:500]
-                }, indent=2))]
+                message = arguments["message"]
+                if not message or not message.strip():
+                    return [TextContent(type="text", text="Error: Commit message cannot be empty")]
 
-            try:
-                new_content = content.replace(old_text, new_text, 1)
-                backup = path.with_suffix('.bak')
-                shutil.copy2(path, backup)
-                path.write_text(new_content, encoding='utf-8')
-                self.memory.add_context("file_edit", {"path": filepath})
-                return [TextContent(type="text", text=f"Approved! File updated + backup: {backup.name}")]
-            except Exception as e:
-                return [TextContent(type="text", text=f"Error: {e}")]
+                try:
+                    # Check if there are changes to commit
+                    status_result = subprocess.run(
+                        ["git", "status", "--porcelain"],
+                        cwd=str(self.watch_dir),
+                        capture_output=True, text=True,
+                        timeout=10
+                    )
+                    if not status_result.stdout.strip():
+                        return [TextContent(type="text", text="No changes to commit")]
 
-        # ---------- GIT DIFF ----------
-        @self.server.set_tool_handler("git_diff")
-        async def git_diff(args):
-            git_error = self._check_git_available()
-            if git_error:
-                return [TextContent(type="text", text=f"Error: {git_error}")]
+                    subprocess.run(["git", "add", "."], cwd=str(self.watch_dir), check=True, timeout=30)
+                    result = subprocess.run(
+                        ["git", "commit", "-m", message],
+                        cwd=str(self.watch_dir),
+                        capture_output=True, text=True, check=True,
+                        timeout=30
+                    )
+                    commit_hash = result.stdout.split()[1] if "commit" in result.stdout else "unknown"
+                    self.memory.remember(f"commit_{commit_hash}", message, "commits")
+                    return [TextContent(type="text", text=f"Committed: {commit_hash}\n{message}")]
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"Git commit failed: {e.stderr if e.stderr else e}")
+                    return [TextContent(type="text", text=f"Commit failed: {e.stderr if e.stderr else str(e)}")]
+                except Exception as e:
+                    logger.error(f"Git commit error: {e}")
+                    return [TextContent(type="text", text=f"Commit failed: {e}")]
 
-            files = args.get("files", [])
-            try:
-                result = subprocess.run(
-                    ["git", "diff", "--", *files],
-                    cwd=str(self.watch_dir),
-                    capture_output=True, text=True,
-                    timeout=30
-                )
-                diff = result.stdout or "No changes"
-                self.memory.remember(f"diff_{datetime.now().isoformat()}", diff, "git_diffs")
-                return [TextContent(type="text", text=diff)]
-            except Exception as e:
-                logger.error(f"Git diff failed: {e}")
-                return [TextContent(type="text", text=f"Git error: {e}")]
+            # ---------- GIT LOG ----------
+            elif name == "git_log":
+                git_error = self._check_git_available()
+                if git_error:
+                    return [TextContent(type="text", text=f"Error: {git_error}")]
 
-        # ---------- GIT COMMIT ----------
-        @self.server.set_tool_handler("git_commit")
-        async def git_commit(args):
-            git_error = self._check_git_available()
-            if git_error:
-                return [TextContent(type="text", text=f"Error: {git_error}")]
+                limit = arguments.get("limit", 5)
+                try:
+                    result = subprocess.run(
+                        ["git", "log", f"-{limit}", "--oneline"],
+                        cwd=str(self.watch_dir),
+                        capture_output=True, text=True,
+                        timeout=30
+                    )
+                    log_output = result.stdout if result.stdout else "No commits yet"
+                    return [TextContent(type="text", text=log_output)]
+                except Exception as e:
+                    logger.error(f"Git log failed: {e}")
+                    return [TextContent(type="text", text=f"Git log error: {e}")]
 
-            message = args["message"]
-            if not message or not message.strip():
-                return [TextContent(type="text", text="Error: Commit message cannot be empty")]
+            # ---------- LLM QUERY ----------
+            elif name == "llm_query":
+                prompt = arguments["prompt"]
+                context = json.dumps(self.memory.get_context()[-5:])
+                response = await self.llm.query(prompt, "grok", context=context)
+                self.memory.remember(f"grok_{datetime.now().isoformat()}", response, "llm")
+                return [TextContent(type="text", text=response)]
 
-            try:
-                # Check if there are changes to commit
-                status_result = subprocess.run(
-                    ["git", "status", "--porcelain"],
-                    cwd=str(self.watch_dir),
-                    capture_output=True, text=True,
-                    timeout=10
-                )
-                if not status_result.stdout.strip():
-                    return [TextContent(type="text", text="No changes to commit")]
-
-                subprocess.run(["git", "add", "."], cwd=str(self.watch_dir), check=True, timeout=30)
-                result = subprocess.run(
-                    ["git", "commit", "-m", message],
-                    cwd=str(self.watch_dir),
-                    capture_output=True, text=True, check=True,
-                    timeout=30
-                )
-                commit_hash = result.stdout.split()[1] if "commit" in result.stdout else "unknown"
-                self.memory.remember(f"commit_{commit_hash}", message, "commits")
-                return [TextContent(type="text", text=f"Committed: {commit_hash}\n{message}")]
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Git commit failed: {e.stderr if e.stderr else e}")
-                return [TextContent(type="text", text=f"Commit failed: {e.stderr if e.stderr else str(e)}")]
-            except Exception as e:
-                logger.error(f"Git commit error: {e}")
-                return [TextContent(type="text", text=f"Commit failed: {e}")]
-
-        # ---------- GIT LOG ----------
-        @self.server.set_tool_handler("git_log")
-        async def git_log(args):
-            git_error = self._check_git_available()
-            if git_error:
-                return [TextContent(type="text", text=f"Error: {git_error}")]
-
-            limit = args.get("limit", 5)
-            try:
-                result = subprocess.run(
-                    ["git", "log", f"-{limit}", "--oneline"],
-                    cwd=str(self.watch_dir),
-                    capture_output=True, text=True,
-                    timeout=30
-                )
-                log_output = result.stdout if result.stdout else "No commits yet"
-                return [TextContent(type="text", text=log_output)]
-            except Exception as e:
-                logger.error(f"Git log failed: {e}")
-                return [TextContent(type="text", text=f"Git log error: {e}")]
-
-        # ---------- LLM QUERY ----------
-        @self.server.set_tool_handler("llm_query")
-        async def llm_query(args):
-            prompt = args["prompt"]
-            context = json.dumps(self.memory.get_context()[-5:])
-            response = await self.llm.query(prompt, "grok", context=context)
-            self.memory.remember(f"grok_{datetime.now().isoformat()}", response, "llm")
-            return [TextContent(type="text", text=response)]
+            # ---------- UNKNOWN TOOL ----------
+            else:
+                raise ValueError(f"Unknown tool: {name}")
 
     async def run(self):
         logger.info("MCP Server starting...")
