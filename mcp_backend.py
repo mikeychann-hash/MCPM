@@ -156,6 +156,7 @@ class FGDMCPServer:
         self.recent_changes = []
         self.observer = None
         self._start_watcher()
+        self._start_approval_monitor()
 
         self.server = Server("fgd-mcp-server")
         self._setup_handlers()
@@ -172,6 +173,65 @@ class FGDMCPServer:
             logger.info("File watcher started")
         except Exception as e:
             logger.warning(f"File watcher failed: {e}")
+
+    def _start_approval_monitor(self):
+        """Start background task to monitor for approval files."""
+        asyncio.create_task(self._approval_monitor_loop())
+        logger.info("Approval monitor started")
+
+    async def _approval_monitor_loop(self):
+        """Background loop to check for approval files and auto-apply edits."""
+        while True:
+            try:
+                await asyncio.sleep(2)  # Check every 2 seconds
+
+                approval_file = self.watch_dir / ".fgd_approval.json"
+                if not approval_file.exists():
+                    continue
+
+                # Read approval
+                approval_data = json.loads(approval_file.read_text())
+
+                if approval_data.get("approved"):
+                    # Execute the edit
+                    filepath = approval_data["filepath"]
+                    old_text = approval_data["old_text"]
+                    new_text = approval_data["new_text"]
+
+                    logger.info(f"🔵 Auto-applying approved edit: {filepath}")
+
+                    try:
+                        path = self._sanitize(filepath)
+                        content = path.read_text(encoding='utf-8')
+                        new_content = content.replace(old_text, new_text, 1)
+
+                        # Create backup
+                        backup = path.with_suffix('.bak')
+                        if path.exists():
+                            shutil.copy2(path, backup)
+
+                        # Write new content
+                        path.write_text(new_content, encoding='utf-8')
+
+                        self.memory.add_context("file_edit", {
+                            "path": filepath,
+                            "approved": True,
+                            "auto_applied": True
+                        })
+
+                        logger.info(f"✅ Edit successfully applied: {filepath} (backup: {backup.name})")
+
+                    except Exception as e:
+                        logger.error(f"❌ Failed to apply edit: {e}")
+
+                else:
+                    logger.info(f"❌ Edit rejected by user: {approval_data.get('filepath')}")
+
+                # Clean up approval file
+                approval_file.unlink()
+
+            except Exception as e:
+                logger.debug(f"Approval monitor error: {e}")
 
     def _on_file_change(self, event_type, path):
         try:
@@ -377,20 +437,45 @@ class FGDMCPServer:
 
                 if not confirm:
                     preview = content.replace(old_text, new_text, 1)
+
+                    # Save pending edit to file for GUI to pick up
+                    pending_edit_file = self.watch_dir / ".fgd_pending_edit.json"
+                    pending_edit_data = {
+                        "filepath": filepath,
+                        "old_text": old_text,
+                        "new_text": new_text,
+                        "diff": f"- {old_text}\n+ {new_text}",
+                        "preview": preview[:500],
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    try:
+                        pending_edit_file.write_text(json.dumps(pending_edit_data, indent=2))
+                        logger.info(f"Pending edit saved to {pending_edit_file}")
+                    except Exception as e:
+                        logger.error(f"Failed to save pending edit: {e}")
+
                     return [TextContent(type="text", text=json.dumps({
                         "action": "confirm_edit",
                         "filepath": filepath,
                         "diff": f"- {old_text}\n+ {new_text}",
-                        "preview": preview[:500]
+                        "preview": preview[:500],
+                        "message": "Edit pending approval - check GUI"
                     }, indent=2))]
 
                 try:
                     new_content = content.replace(old_text, new_text, 1)
                     backup = path.with_suffix('.bak')
-                    shutil.copy2(path, backup)
+                    if path.exists():
+                        shutil.copy2(path, backup)
                     path.write_text(new_content, encoding='utf-8')
-                    self.memory.add_context("file_edit", {"path": filepath})
-                    return [TextContent(type="text", text=f"Approved! File updated + backup: {backup.name}")]
+                    self.memory.add_context("file_edit", {"path": filepath, "approved": True})
+
+                    # Clean up pending edit file
+                    pending_edit_file = self.watch_dir / ".fgd_pending_edit.json"
+                    if pending_edit_file.exists():
+                        pending_edit_file.unlink()
+
+                    return [TextContent(type="text", text=f"✅ Approved! File updated + backup: {backup.name}")]
                 except Exception as e:
                     return [TextContent(type="text", text=f"Error: {e}")]
 
@@ -478,7 +563,24 @@ class FGDMCPServer:
                 prompt = arguments["prompt"]
                 context = json.dumps(self.memory.get_context()[-5:])
                 response = await self.llm.query(prompt, "grok", context=context)
-                self.memory.remember(f"grok_{datetime.now().isoformat()}", response, "llm")
+
+                # Save conversation as prompt + response pairs
+                timestamp = datetime.now().isoformat()
+                conversation_entry = {
+                    "prompt": prompt,
+                    "response": response,
+                    "provider": "grok",
+                    "timestamp": timestamp,
+                    "context_used": len(self.memory.get_context())
+                }
+
+                # Store in conversations category for threading
+                self.memory.remember(f"chat_{timestamp}", conversation_entry, "conversations")
+
+                # Also keep in llm category for backward compatibility
+                self.memory.remember(f"grok_{timestamp}", response, "llm")
+
+                logger.info(f"Chat saved: prompt={prompt[:50]}..., response={response[:50]}...")
                 return [TextContent(type="text", text=response)]
 
             # ---------- UNKNOWN TOOL ----------

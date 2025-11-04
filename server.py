@@ -403,6 +403,86 @@ async def llm_query(request: Request, query_req: LLMQueryRequest):
         raise HTTPException(status_code=500, detail=f"LLM query failed: {str(e)}")
 
 
+@app.get("/api/conversations")
+@limiter.limit("30/minute")
+async def get_conversations(request: Request):
+    """
+    Retrieve all conversation history.
+
+    Returns conversation threads with prompts and responses.
+    """
+    try:
+        if not RUN["server"]:
+            raise HTTPException(status_code=400, detail="Server not running")
+
+        conversations = RUN["server"].memory.recall(category="conversations")
+
+        # Sort by timestamp (most recent first)
+        sorted_convos = sorted(
+            conversations.items(),
+            key=lambda x: x[1].get("value", {}).get("timestamp", ""),
+            reverse=True
+        )
+
+        return JSONResponse({
+            "success": True,
+            "count": len(sorted_convos),
+            "conversations": [
+                {
+                    "id": key,
+                    "prompt": val["value"]["prompt"],
+                    "response": val["value"]["response"],
+                    "provider": val["value"]["provider"],
+                    "timestamp": val["value"]["timestamp"],
+                    "context_used": val["value"].get("context_used", 0)
+                }
+                for key, val in sorted_convos
+            ]
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving conversations: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve conversations: {str(e)}")
+
+
+@app.get("/api/pending_edits")
+@limiter.limit("60/minute")
+async def get_pending_edits(request: Request):
+    """
+    Get pending edit requests awaiting approval.
+
+    Returns pending edits that need user approval.
+    """
+    try:
+        if not RUN["server"]:
+            raise HTTPException(status_code=400, detail="Server not running")
+
+        pending_file = Path(RUN["watch_dir"]) / ".fgd_pending_edit.json"
+
+        if not pending_file.exists():
+            return JSONResponse({
+                "success": True,
+                "has_pending": False,
+                "pending_edit": None
+            })
+
+        pending_data = json.loads(pending_file.read_text())
+
+        return JSONResponse({
+            "success": True,
+            "has_pending": True,
+            "pending_edit": pending_data
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving pending edits: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve pending edits: {str(e)}")
+
+
 # ==================== ERROR HANDLERS ====================
 
 @app.exception_handler(404)
