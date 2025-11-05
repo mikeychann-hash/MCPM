@@ -26,6 +26,7 @@ from PyQt6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
     QPoint,
+    QPointF,
     QSize,
     QTimer,
     Qt,
@@ -346,7 +347,7 @@ class AnimatedButton(QPushButton):
             painter.scale(scale, scale)
             painter.translate(-rect.center())
 
-            gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+            gradient = QLinearGradient(QPointF(rect.topLeft()), QPointF(rect.bottomRight()))
             shift = self._gradient_shift
             gradient.setColorAt((shift + 0.0) % 1.0, QColor(self.gradient[0]))
             gradient.setColorAt((shift + 0.5) % 1.0, QColor(self.gradient[1]))
@@ -409,7 +410,7 @@ class GlassCard(QWidget):
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             rect = self.rect().adjusted(1, 1, -1, -1)
 
-            gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+            gradient = QLinearGradient(QPointF(rect.topLeft()), QPointF(rect.bottomRight()))
             gradient.setColorAt(0.0, _color("#ffffff", 30))
             gradient.setColorAt(1.0, _color("#667eea", 35))
 
@@ -553,7 +554,7 @@ class AnimatedStatusLabel(QLabel):
         try:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            center = QPoint(self.rect().left() + 16, self.rect().center().y())
+            center = QPointF(self.rect().left() + 16, self.rect().center().y())
 
             pulse_radius = 8 + 4 * math.sin(self._pulse * math.pi)
             gradient = QRadialGradient(center, pulse_radius)
