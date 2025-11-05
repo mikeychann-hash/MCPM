@@ -14,6 +14,7 @@ import os
 import json
 import asyncio
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +28,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import uvicorn
 from dotenv import load_dotenv
+import yaml
 
 from mcp_backend import FGDMCPServer
 
@@ -207,19 +209,55 @@ async def start(request: Request, start_req: StartRequest):
         provider = start_req.default_provider
 
         # Use config.example.yaml as template
-        config_path = "config.example.yaml"
-        if not Path(config_path).exists():
+        template_path = Path("config.example.yaml")
+        if not template_path.exists():
             return JSONResponse({
                 "success": False,
                 "error": "Missing config.example.yaml template file"
             }, status_code=500)
 
+        try:
+            config_data = yaml.safe_load(template_path.read_text()) or {}
+        except Exception as e:
+            logger.error(f"Failed to load config template: {e}", exc_info=True)
+            return JSONResponse({
+                "success": False,
+                "error": "Failed to load configuration template"
+            }, status_code=500)
+
+        config_data["watch_dir"] = watch_dir
+        memory_path = Path(watch_dir) / ".fgd_memory.json"
+        if not memory_path.exists():
+            try:
+                memory_path.write_text("{}")
+            except Exception as e:
+                logger.error(f"Failed to initialize memory file: {e}", exc_info=True)
+                return JSONResponse({
+                    "success": False,
+                    "error": "Failed to initialize memory file"
+                }, status_code=500)
+
+        config_data["memory_file"] = str(memory_path)
+        config_data.setdefault("llm", {})
+        config_data["llm"].setdefault("providers", {})
+        config_data["llm"]["default_provider"] = provider
+
+        runtime_config_path = Path(".fgd_runtime_config.yaml")
+        try:
+            runtime_config_path.write_text(yaml.safe_dump(config_data))
+        except Exception as e:
+            logger.error(f"Failed to write runtime config: {e}", exc_info=True)
+            return JSONResponse({
+                "success": False,
+                "error": "Failed to write runtime configuration"
+            }, status_code=500)
+
         # Create server instance
         try:
-            RUN["server"] = FGDMCPServer(config_path)
+            RUN["server"] = FGDMCPServer(str(runtime_config_path))
             RUN["watch_dir"] = watch_dir
-            RUN["memory_file"] = str(Path(watch_dir) / ".fgd_memory.json")
-            RUN["config_path"] = config_path
+            RUN["memory_file"] = str(memory_path)
+            RUN["config_path"] = str(runtime_config_path)
 
             # Start MCP server in background
             asyncio.create_task(RUN["server"].run())
@@ -383,12 +421,27 @@ async def llm_query(request: Request, query_req: LLMQueryRequest):
 
         prompt = query_req.prompt
         provider = query_req.provider
+        memory_store = RUN["server"].memory
+        context_entries = memory_store.get_context()[-5:]
+        context_blob = json.dumps(context_entries) if context_entries else ""
 
         if not prompt:
             raise HTTPException(status_code=400, detail="No prompt provided")
 
         # Query the LLM
-        response = await RUN["server"].llm.query(prompt, provider)
+        response = await RUN["server"].llm.query(prompt, provider, context=context_blob)
+
+        timestamp = datetime.now().isoformat()
+        conversation_entry = {
+            "prompt": prompt,
+            "response": response,
+            "provider": provider,
+            "timestamp": timestamp,
+            "context_used": len(memory_store.get_context())
+        }
+
+        memory_store.remember(f"chat_{timestamp}", conversation_entry, "conversations")
+        memory_store.remember(f"{provider}_{timestamp}", response, "llm")
 
         return JSONResponse({
             "success": True,
