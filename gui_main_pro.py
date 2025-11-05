@@ -1328,10 +1328,25 @@ class FGDGUI(QWidget):
         self.log_file.write_text("")
 
         env = os.environ.copy()
+
+        # Use absolute path to mcp_backend.py (in MCPM directory, not user's project)
+        mcpm_root = Path(__file__).parent.resolve()
+        backend_script = mcpm_root / "mcp_backend.py"
+
+        if not backend_script.exists():
+            logger.error(f"Backend script not found: {backend_script}")
+            self.connection_status.set_status("error", "🚨 Backend script missing")
+            QMessageBox.critical(self, "Missing Backend", f"Could not find mcp_backend.py at:\n{backend_script}")
+            return
+
+        logger.info(f"Starting backend: {backend_script}")
+        logger.info(f"Config path: {config_path}")
+        logger.info(f"Working directory: {mcpm_root}")
+
         try:
             self.process = subprocess.Popen(
-                [sys.executable, "mcp_backend.py", str(config_path)],
-                cwd=dir_path,
+                [sys.executable, str(backend_script), str(config_path)],
+                cwd=str(mcpm_root),  # Run from MCPM directory, not user's project
                 env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
