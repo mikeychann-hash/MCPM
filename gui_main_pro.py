@@ -329,41 +329,48 @@ class AnimatedButton(QPushButton):
         super().mouseReleaseEvent(event)
 
     def _advance_gradient(self) -> None:
-        self._gradient_shift = (self._gradient_shift + 0.01) % 1.0
-        self.update()
+        try:
+            self._gradient_shift = (self._gradient_shift + 0.01) % 1.0
+            self.update()
+        except Exception as e:
+            logger.error(f"Error in gradient animation: {e}")
 
     def paintEvent(self, event):  # noqa: D401 - Qt override
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = self.rect().adjusted(4, 4, -4, -4)
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            rect = self.rect().adjusted(4, 4, -4, -4)
 
-        scale = 1.0 + 0.04 * self._hover_progress - 0.02 * self._press_progress
-        painter.translate(rect.center())
-        painter.scale(scale, scale)
-        painter.translate(-rect.center())
+            scale = 1.0 + 0.04 * self._hover_progress - 0.02 * self._press_progress
+            painter.translate(rect.center())
+            painter.scale(scale, scale)
+            painter.translate(-rect.center())
 
-        gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        shift = self._gradient_shift
-        gradient.setColorAt((shift + 0.0) % 1.0, QColor(self.gradient[0]))
-        gradient.setColorAt((shift + 0.5) % 1.0, QColor(self.gradient[1]))
-        gradient.setColorAt((shift + 1.0) % 1.0, QColor(self.gradient[0]))
+            gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+            shift = self._gradient_shift
+            gradient.setColorAt((shift + 0.0) % 1.0, QColor(self.gradient[0]))
+            gradient.setColorAt((shift + 0.5) % 1.0, QColor(self.gradient[1]))
+            gradient.setColorAt((shift + 1.0) % 1.0, QColor(self.gradient[0]))
 
-        path = QPainterPath()
-        path.addRoundedRect(rect, 14, 14)
+            path = QPainterPath()
+            path.addRoundedRect(rect, 14, 14)
 
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(gradient)
-        painter.drawPath(path)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(gradient)
+            painter.drawPath(path)
 
-        overlay_color = QColor("white")
-        overlay_color.setAlphaF(0.1 * self._hover_progress + 0.05 * self._press_progress)
-        painter.setBrush(overlay_color)
-        painter.drawPath(path)
+            overlay_color = QColor("white")
+            overlay_color.setAlphaF(0.1 * self._hover_progress + 0.05 * self._press_progress)
+            painter.setBrush(overlay_color)
+            painter.drawPath(path)
 
-        painter.resetTransform()
-        painter.setPen(QColor("white"))
-        painter.setFont(self.font())
-        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.text())
+            painter.resetTransform()
+            painter.setPen(QColor("white"))
+            painter.setFont(self.font())
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.text())
+        except Exception as e:
+            logger.error(f"Error in AnimatedButton paintEvent: {e}")
+            super().paintEvent(event)
 
     def get_hover_progress(self) -> float:
         return self._hover_progress
@@ -397,17 +404,21 @@ class GlassCard(QWidget):
         self.setContentsMargins(0, 0, 0, 0)
 
     def paintEvent(self, event):  # noqa: D401 - Qt override
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = self.rect().adjusted(1, 1, -1, -1)
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            rect = self.rect().adjusted(1, 1, -1, -1)
 
-        gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        gradient.setColorAt(0.0, _color("#ffffff", 30))
-        gradient.setColorAt(1.0, _color("#667eea", 35))
+            gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+            gradient.setColorAt(0.0, _color("#ffffff", 30))
+            gradient.setColorAt(1.0, _color("#667eea", 35))
 
-        painter.setPen(QPen(_color("#ffffff", 45), 2))
-        painter.setBrush(gradient)
-        painter.drawRoundedRect(rect, 20, 20)
+            painter.setPen(QPen(_color("#ffffff", 45), 2))
+            painter.setBrush(gradient)
+            painter.drawRoundedRect(rect, 20, 20)
+        except Exception as e:
+            logger.error(f"Error in GlassCard paintEvent: {e}")
+            super().paintEvent(event)
 
 
 class AnimatedLineEdit(QLineEdit):
@@ -440,28 +451,32 @@ class AnimatedLineEdit(QLineEdit):
         self._focus_anim.start()
 
     def paintEvent(self, event):  # noqa: D401 - Qt override
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = self.rect().adjusted(2, 2, -2, -2)
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            rect = self.rect().adjusted(2, 2, -2, -2)
 
-        base_color = _color("#0d1117", 220)
-        painter.setBrush(base_color)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(rect, 14, 14)
+            base_color = _color("#0d1117", 220)
+            painter.setBrush(base_color)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(rect, 14, 14)
 
-        border_color = QColor("#667eea")
-        border_color.setAlphaF(0.15 + 0.45 * self._focus_progress)
-        painter.setPen(QPen(border_color, 2))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(rect, 14, 14)
+            border_color = QColor("#667eea")
+            border_color.setAlphaF(0.15 + 0.45 * self._focus_progress)
+            painter.setPen(QPen(border_color, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect, 14, 14)
 
-        glow_color = QColor("#764ba2")
-        glow_color.setAlphaF(0.2 * self._focus_progress)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(glow_color)
-        painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 12, 12)
+            glow_color = QColor("#764ba2")
+            glow_color.setAlphaF(0.2 * self._focus_progress)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(glow_color)
+            painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 12, 12)
 
-        super().paintEvent(event)
+            super().paintEvent(event)
+        except Exception as e:
+            logger.error(f"Error in AnimatedLineEdit paintEvent: {e}")
+            super().paintEvent(event)
 
     def get_focus_progress(self) -> float:
         return self._focus_progress
@@ -535,26 +550,30 @@ class AnimatedStatusLabel(QLabel):
         self._pulse_anim.start()
 
     def paintEvent(self, event):  # noqa: D401 - Qt override
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        center = QPoint(self.rect().left() + 16, self.rect().center().y())
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            center = QPoint(self.rect().left() + 16, self.rect().center().y())
 
-        pulse_radius = 8 + 4 * math.sin(self._pulse * math.pi)
-        gradient = QRadialGradient(center, pulse_radius)
-        base_color = QColor(self._indicator_color)
-        gradient.setColorAt(0.0, base_color)
-        fading = QColor(self._indicator_color)
-        fading.setAlpha(40)
-        gradient.setColorAt(1.0, fading)
+            pulse_radius = 8 + 4 * math.sin(self._pulse * math.pi)
+            gradient = QRadialGradient(center, pulse_radius)
+            base_color = QColor(self._indicator_color)
+            gradient.setColorAt(0.0, base_color)
+            fading = QColor(self._indicator_color)
+            fading.setAlpha(40)
+            gradient.setColorAt(1.0, fading)
 
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(gradient)
-        painter.drawEllipse(center, pulse_radius, pulse_radius)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(gradient)
+            painter.drawEllipse(center, pulse_radius, pulse_radius)
 
-        painter.setBrush(self._indicator_color)
-        painter.drawEllipse(center, 6, 6)
+            painter.setBrush(self._indicator_color)
+            painter.drawEllipse(center, 6, 6)
 
-        super().paintEvent(event)
+            super().paintEvent(event)
+        except Exception as e:
+            logger.error(f"Error in AnimatedStatusLabel paintEvent: {e}")
+            super().paintEvent(event)
 
     def set_status(self, status: str, message: str) -> None:
         color = QColor(self.STATUS_COLORS.get(status, "#50fa7b"))
@@ -705,15 +724,20 @@ class FGDGUI(QWidget):
         self._add_status_bar()
 
     def _fade_in_intro(self) -> None:
-        effect = QGraphicsOpacityEffect(self)
-        effect.setOpacity(0.0)
-        self.setGraphicsEffect(effect)
-        self._fade_anim = QPropertyAnimation(effect, b"opacity", self)
-        self._fade_anim.setDuration(820)
-        self._fade_anim.setStartValue(0.0)
-        self._fade_anim.setEndValue(1.0)
-        self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._fade_anim.start()
+        try:
+            effect = QGraphicsOpacityEffect(self)
+            effect.setOpacity(0.0)
+            self.setGraphicsEffect(effect)
+            self._fade_anim = QPropertyAnimation(effect, b"opacity", self)
+            self._fade_anim.setDuration(820)
+            self._fade_anim.setStartValue(0.0)
+            self._fade_anim.setEndValue(1.0)
+            self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            # Clean up the graphics effect after animation completes
+            self._fade_anim.finished.connect(lambda: self.setGraphicsEffect(None))
+            self._fade_anim.start()
+        except Exception as e:
+            logger.error(f"Error in fade-in animation: {e}")
 
     def _start_header_animation(self) -> None:
         self._header_timer = QTimer(self)
@@ -721,12 +745,15 @@ class FGDGUI(QWidget):
         self._header_timer.start(90)
 
     def _tick_header_gradient(self) -> None:
-        self._header_phase = (self._header_phase + 0.02) % 1.0
-        wave = (math.sin(self._header_phase * 2 * math.pi) + 1) / 2
-        color_a = _mix_hex("#667eea", "#764ba2", wave)
-        color_b = _mix_hex("#764ba2", "#f093fb", 1 - wave * 0.6)
-        if hasattr(self, "header"):
-            self.header.setStyleSheet(self._header_style_template.format(color_a=color_a, color_b=color_b))
+        try:
+            self._header_phase = (self._header_phase + 0.02) % 1.0
+            wave = (math.sin(self._header_phase * 2 * math.pi) + 1) / 2
+            color_a = _mix_hex("#667eea", "#764ba2", wave)
+            color_b = _mix_hex("#764ba2", "#f093fb", 1 - wave * 0.6)
+            if hasattr(self, "header") and hasattr(self, "_header_style_template"):
+                self.header.setStyleSheet(self._header_style_template.format(color_a=color_a, color_b=color_b))
+        except Exception as e:
+            logger.error(f"Error in header gradient animation: {e}")
 
     def _add_header(self):
         """Add the gradient header banner."""
@@ -1680,8 +1707,26 @@ class FGDGUI(QWidget):
         return self._log_colors["default"]
 
 
+def _qt_exception_hook(exc_type, exc_value, exc_traceback):
+    """Global exception hook for Qt event loop crashes."""
+    logger.critical("=" * 60)
+    logger.critical("UNHANDLED EXCEPTION IN QT EVENT LOOP")
+    logger.critical("=" * 60)
+    logger.critical(f"Type: {exc_type.__name__}")
+    logger.critical(f"Value: {exc_value}")
+    logger.critical("Traceback:")
+    logger.critical(''.join(traceback.format_exception(exc_type, exc_value, exc_traceback)))
+    logger.critical("=" * 60)
+
+    # Call the default exception hook
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+
 def _run_app() -> tuple[int, Optional[QApplication]]:
     """Entry point wrapper that bootstraps the Qt application."""
+    # Install global exception hook
+    sys.excepthook = _qt_exception_hook
+
     logger.info("Starting MCPM GUI...")
     logger.info(f"Python version: {sys.version}")
     logger.info(f"Qt application arguments: {sys.argv}")
@@ -1703,7 +1748,7 @@ def _run_app() -> tuple[int, Optional[QApplication]]:
         logger.info(f"Event loop finished with exit code: {exit_code}")
         return exit_code, app
     except Exception as e:
-        logger.error(f"Exception during GUI initialization: {e}")
+        logger.error(f"Exception during GUI initialization or event loop: {e}")
         logger.error(traceback.format_exc())
         # Return app instance so error dialog can use event loop
         raise  # Re-raise so main block can handle it
