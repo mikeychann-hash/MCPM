@@ -81,7 +81,8 @@ RUN = {
     "watch_dir": None,
     "memory_file": None,
     "log_file": "fgd_runtime.log",
-    "config_path": None
+    "config_path": None,
+    "server_task": None,
 }
 
 # ==================== PYDANTIC MODELS ====================
@@ -260,7 +261,21 @@ async def start(request: Request, start_req: StartRequest):
             RUN["config_path"] = str(runtime_config_path)
 
             # Start MCP server in background
-            asyncio.create_task(RUN["server"].run())
+            server_task = asyncio.create_task(RUN["server"].run())
+            RUN["server_task"] = server_task
+
+            def _log_task_result(task: asyncio.Task) -> None:
+                try:
+                    task.result()
+                except asyncio.CancelledError:
+                    logger.info("MCP server task cancelled")
+                except Exception as exc:  # pragma: no cover - logged for visibility
+                    logger.error(f"MCP server task crashed: {exc}", exc_info=True)
+                finally:
+                    RUN["server_task"] = None
+                    RUN["server"] = None
+
+            server_task.add_done_callback(_log_task_result)
 
             # Log successful start
             logger.info(f"MCP server started - watching: {watch_dir}, provider: {provider}")
@@ -287,6 +302,7 @@ async def start(request: Request, start_req: StartRequest):
     except Exception as e:
         logger.error(f"Error starting server: {e}", exc_info=True)
         RUN["server"] = None
+        RUN["server_task"] = None
         return JSONResponse({
             "success": False,
             "error": f"Failed to start server: {str(e)}"
@@ -314,6 +330,15 @@ async def stop(request: Request):
         RUN["watch_dir"] = None
         RUN["memory_file"] = None
 
+        server_task = RUN.get("server_task")
+        if server_task and not server_task.done():
+            server_task.cancel()
+            try:
+                await server_task
+            except asyncio.CancelledError:
+                pass
+        RUN["server_task"] = None
+
         logger.info("MCP server stopped via API")
 
         return JSONResponse({
@@ -339,34 +364,39 @@ async def logs(request: Request, file: str):
         Log file contents as plain text
     """
     try:
-        # Sanitize file path to prevent traversal attacks
-        log_path = Path(file).resolve()
+        if len(file) > 1024:
+            raise HTTPException(status_code=400, detail="Log path too long")
 
-        # Only allow reading from specific log directories
-        allowed_paths = [
-            Path(".").resolve(),
-            Path(RUN.get("watch_dir", ".")).resolve()
-        ]
+        try:
+            log_path = Path(file).expanduser().resolve()
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid log path: {exc}") from exc
 
-        # Check if log file is in an allowed location
-        is_allowed = any(
-            str(log_path).startswith(str(allowed))
-            for allowed in allowed_paths
-        )
+        allowed_roots = [Path(".").resolve()]
+        if RUN.get("watch_dir"):
+            allowed_roots.append(Path(RUN["watch_dir"]).resolve())
 
-        if not is_allowed:
-            raise HTTPException(
-                status_code=403,
-                detail="Access to this log file is not permitted"
-            )
+        for root in allowed_roots:
+            try:
+                log_path.relative_to(root)
+                break
+            except ValueError:
+                continue
+        else:
+            raise HTTPException(status_code=403, detail="Access to this log file is not permitted")
+
+        if log_path.is_dir():
+            raise HTTPException(status_code=400, detail="Log path must point to a file")
+
+        allowed_suffixes = {"", ".log", ".txt", ".json"}
+        if log_path.suffix.lower() not in allowed_suffixes:
+            raise HTTPException(status_code=403, detail="Unsupported log file type")
 
         if not log_path.exists():
             return "No logs yet."
 
-        # Limit log file size to prevent memory issues
         max_size = 10 * 1024 * 1024  # 10 MB
         if log_path.stat().st_size > max_size:
-            # Read only last 10MB
             with open(log_path, 'rb') as f:
                 f.seek(-max_size, 2)
                 content = f.read().decode('utf-8', errors='ignore')
@@ -574,17 +604,33 @@ async def shutdown_event():
         try:
             RUN["server"].stop()
             logger.info("MCP server stopped during shutdown")
+            RUN["server"] = None
         except Exception as e:
             logger.error(f"Error stopping MCP server during shutdown: {e}")
+    server_task = RUN.get("server_task")
+    if server_task and not server_task.done():
+        server_task.cancel()
+        try:
+            await server_task
+        except asyncio.CancelledError:
+            pass
+    RUN["server_task"] = None
 
 
 # ==================== MAIN ====================
 
 if __name__ == "__main__":
     # Get configuration from environment
-    host = os.getenv("API_HOST", "0.0.0.0")
+    default_host = "127.0.0.1"
+    host = os.getenv("API_HOST", default_host).strip() or default_host
     port = int(os.getenv("API_PORT", "8456"))
     reload = os.getenv("API_RELOAD", "false").lower() == "true"
+
+    if host == "0.0.0.0":
+        logger.warning(
+            "Binding to 0.0.0.0 exposes the API on all interfaces. "
+            "Set API_HOST to 127.0.0.1 to limit access to the local machine."
+        )
 
     logger.info(f"Starting server on {host}:{port}")
 

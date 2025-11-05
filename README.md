@@ -353,6 +353,47 @@ Access endpoints at `http://localhost:8456`:
 - `GET /api/memory` - Retrieve all memories
 - `POST /api/llm_query` - Query LLM directly
 
+### Command-Line Grok Control Cheatsheet
+
+Use the REST server when you just need a quick way to send prompts to the Grok LLM without opening the GUI. The sequence below assumes you are in the repository root and have already followed the [Installation](#installation) steps.
+
+```bash
+# 1) Activate your virtual environment (or skip if already active)
+source .venv/bin/activate
+
+# 2) Ensure your Grok key is available to the process
+export XAI_API_KEY="sk-your-grok-key"
+
+# 3) Launch the FastAPI wrapper in the background
+python server.py &
+
+# 4) Start the MCP backend through the API (edit watch_dir to your project path)
+curl -s -X POST http://localhost:8456/api/start \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "watch_dir": "/workspace/MCPM",
+        "default_provider": "grok"
+      }'
+
+# 5) Send a prompt to Grok
+curl -s -X POST http://localhost:8456/api/llm_query \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "prompt": "Summarize README.md",
+        "provider": "grok"
+      }'
+
+# 6) (Optional) Inspect status or stop the backend when finished
+curl -s http://localhost:8456/api/status | jq
+curl -s -X POST http://localhost:8456/api/stop | jq
+
+# 7) Bring the FastAPI process to the foreground then exit
+fg
+^C
+```
+
+> 💡 Tip: If `jq` is not installed, you can drop the `| jq` portion of the commands—the responses are still valid JSON.
+
 ---
 
 ## API Reference

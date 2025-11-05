@@ -13,7 +13,7 @@ import json
 import hashlib
 import logging
 import platform
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import asyncio
@@ -25,6 +25,7 @@ import subprocess
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import traceback
+from dotenv import load_dotenv
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -32,6 +33,9 @@ from mcp.types import Tool, TextContent
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Ensure environment variables from a local .env are available when running the backend directly
+load_dotenv()
 
 # --------------------------------------------------------------------------- #
 # -------------------------- HELPER CLASSES --------------------------------- #
@@ -173,49 +177,36 @@ class FGDMCPServer:
 
     def _validate_paths(self):
         """Validate paths and warn about OS mismatches"""
+        watch_dir_str = str(self.config.get('watch_dir', '')).strip()
+        if not watch_dir_str:
+            logger.warning("watch_dir is not configured; filesystem tools will be disabled")
+            return
+
         current_os = platform.system()
-        watch_dir_str = self.config.get('watch_dir', '')
+        windows_drive = PureWindowsPath(watch_dir_str).drive
 
-        # Check for Windows path patterns on non-Windows systems
-        is_windows_path = (
-            ':' in watch_dir_str and watch_dir_str[1:3] == ':\\' or
-            ':' in watch_dir_str and watch_dir_str[1:3] == ':/'
-        )
-
-        if is_windows_path and current_os != 'Windows':
+        if windows_drive and current_os != 'Windows':
             logger.error("=" * 80)
             logger.error("🚨 CRITICAL PATH CONFIGURATION ERROR 🚨")
             logger.error("=" * 80)
             logger.error(f"Running on: {current_os}")
             logger.error(f"Config has Windows path: {watch_dir_str}")
-            logger.error("")
             logger.error("This will cause ALL write operations to fail silently!")
             logger.error("Files will be written to unexpected locations or not at all.")
-            logger.error("")
-            logger.error("To fix: Update fgd_config.yaml with the correct path for your OS:")
-            logger.error(f"  watch_dir: /home/user/your-project-directory")
+            logger.error("Update fgd_config.yaml with the correct path for your OS.")
             logger.error("=" * 80)
 
-            # Try to resolve the path anyway and show where it would go
-            try:
-                resolved = Path(watch_dir_str).resolve()
-                logger.error(f"Path would resolve to: {resolved}")
-                if not resolved.exists():
-                    logger.error(f"⚠️  WARNING: This path does not exist!")
-            except Exception as e:
-                logger.error(f"⚠️  Path resolution failed: {e}")
-            logger.error("=" * 80)
-
-        # Check if path exists
         try:
-            path = Path(watch_dir_str).resolve()
-            if not path.exists():
-                logger.warning("=" * 80)
-                logger.warning(f"⚠️  WARNING: watch_dir does not exist: {path}")
-                logger.warning("Write operations will fail until this directory is created.")
-                logger.warning("=" * 80)
-        except Exception as e:
-            logger.error(f"Failed to validate watch_dir: {e}")
+            path = Path(watch_dir_str).expanduser().resolve()
+        except (OSError, RuntimeError) as exc:
+            logger.error(f"Failed to validate watch_dir '{watch_dir_str}': {exc}")
+            return
+
+        if not path.exists():
+            logger.warning("=" * 80)
+            logger.warning(f"⚠️  WARNING: watch_dir does not exist: {path}")
+            logger.warning("Write operations will fail until this directory is created.")
+            logger.warning("=" * 80)
 
     # ------------------------------------------------------------------- #
     # -------------------------- WATCHER -------------------------------- #
@@ -363,6 +354,13 @@ class FGDMCPServer:
         except Exception as e:
             logger.debug(f"Error matching gitignore for {path}: {e}")
             return False
+
+    def _save_pending_edit(self, payload: Dict[str, Any]) -> Path:
+        """Persist a pending edit file for GUI confirmation."""
+        pending_edit_file = self.watch_dir / ".fgd_pending_edit.json"
+        logger.info("💾 Saving pending edit to: %s", pending_edit_file.resolve())
+        pending_edit_file.write_text(json.dumps(payload, indent=2))
+        return pending_edit_file
 
     def _is_git_repo(self) -> bool:
         """Check if watch_dir is a git repository"""
@@ -516,8 +514,6 @@ class FGDMCPServer:
                 if not confirm:
                     preview = content.replace(old_text, new_text, 1)
 
-                    # Save pending edit to file for GUI to pick up
-                    pending_edit_file = self.watch_dir / ".fgd_pending_edit.json"
                     pending_edit_data = {
                         "filepath": filepath,
                         "old_text": old_text,
@@ -527,17 +523,16 @@ class FGDMCPServer:
                         "timestamp": datetime.now().isoformat()
                     }
                     try:
-                        logger.info(f"💾 Saving pending edit to: {pending_edit_file.resolve()}")
-                        pending_edit_file.write_text(json.dumps(pending_edit_data, indent=2))
+                        pending_edit_file = self._save_pending_edit(pending_edit_data)
+                    except OSError as exc:
+                        logger.error("❌ Failed to save pending edit: %s", exc)
+                        return [TextContent(type="text", text=f"Error: Unable to save pending edit ({exc})")]
 
-                        # Verify write succeeded
-                        if pending_edit_file.exists():
-                            size = pending_edit_file.stat().st_size
-                            logger.info(f"✅ Pending edit saved: {pending_edit_file.resolve()} ({size} bytes)")
-                        else:
-                            logger.error(f"❌ Pending edit write failed: File does not exist after write")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to save pending edit to {pending_edit_file.resolve()}: {e}")
+                    logger.info(
+                        "✅ Pending edit saved: %s (%d bytes)",
+                        pending_edit_file.resolve(),
+                        pending_edit_file.stat().st_size,
+                    )
 
                     return [TextContent(type="text", text=json.dumps({
                         "action": "confirm_edit",
