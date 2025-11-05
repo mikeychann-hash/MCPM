@@ -686,7 +686,8 @@ class FGDGUI(QWidget):
         except Exception as e:
             logger.error(f"GUI initialization failed: {e}")
             logger.error(traceback.format_exc())
-            QMessageBox.critical(None, "Initialization Error", f"Failed to initialize GUI:\n{str(e)}\n\nCheck mcpm_gui.log for details")
+            # Don't try to show QMessageBox here - let the main error handler deal with it
+            # QMessageBox requires an event loop which may not be running yet
             raise
 
     def _build_ui(self):
@@ -1679,38 +1680,81 @@ class FGDGUI(QWidget):
         return self._log_colors["default"]
 
 
-def _run_app() -> int:
+def _run_app() -> tuple[int, Optional[QApplication]]:
     """Entry point wrapper that bootstraps the Qt application."""
     logger.info("Starting MCPM GUI...")
+    logger.info(f"Python version: {sys.version}")
+    logger.info(f"Qt application arguments: {sys.argv}")
+
     app = QApplication(sys.argv)
-    win = FGDGUI()
-    win.show()
-    logger.info("GUI window displayed")
-    return app.exec()
+    logger.info("QApplication created successfully")
+
+    try:
+        logger.info("Initializing FGDGUI window...")
+        win = FGDGUI()
+        logger.info("FGDGUI window initialized successfully")
+
+        win.show()
+        win.raise_()  # Bring window to front
+        win.activateWindow()  # Give window focus
+        logger.info("GUI window displayed, starting event loop...")
+
+        exit_code = app.exec()
+        logger.info(f"Event loop finished with exit code: {exit_code}")
+        return exit_code, app
+    except Exception as e:
+        logger.error(f"Exception during GUI initialization: {e}")
+        logger.error(traceback.format_exc())
+        # Return app instance so error dialog can use event loop
+        raise  # Re-raise so main block can handle it
 
 
-def _show_startup_error(exc: Exception) -> None:
+def _show_startup_error(exc: Exception, app: Optional[QApplication] = None) -> None:
     """Display a fatal startup error message to the user."""
     message = (
         f"Application failed to start:\n{exc}\n\n"
         "Check mcpm_gui.log for details.\n\nPress OK to exit."
     )
-    try:
-        QMessageBox.critical(None, "Fatal Error", message)
-    except Exception:
-        print(f"\n{'=' * 60}\nFATAL ERROR:\n{exc}\n{traceback.format_exc()}\n{'=' * 60}")
+
+    # Always print to console first
+    print(f"\n{'=' * 60}\nFATAL ERROR:\n{exc}\n{traceback.format_exc()}\n{'=' * 60}")
+
+    # If we have a QApplication instance, ensure event loop is available for the dialog
+    if app is not None:
+        try:
+            msg_box = QMessageBox()
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+            msg_box.setWindowTitle("Fatal Error")
+            msg_box.setText(message)
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg_box.exec()  # This creates a local event loop for the dialog
+        except Exception as dialog_error:
+            logger.error(f"Could not display error dialog: {dialog_error}")
 
 
 if __name__ == "__main__":
     exit_code = 0
+    app_instance = None
+
+    logger.info("=" * 60)
+    logger.info("MCPM GUI Starting")
+    logger.info("=" * 60)
+
     try:
-        exit_code = _run_app()
+        exit_code, app_instance = _run_app()
+        logger.info(f"Application exited with code: {exit_code}")
     except Exception as exc:
-        logger.critical(f"Fatal error: {exc}")
+        logger.critical(f"Fatal error during startup: {exc}")
         logger.critical(traceback.format_exc())
-        _show_startup_error(exc)
+        _show_startup_error(exc, app_instance)
         exit_code = 1
     finally:
         if exit_code != 0:
+            print("\n" + "=" * 60)
+            print("The application encountered an error and will now close.")
+            print("Check mcpm_gui.log for detailed error information.")
+            print("=" * 60)
             input("\nPress Enter to close...")
+
+    logger.info("Application shutdown complete")
     sys.exit(exit_code)
