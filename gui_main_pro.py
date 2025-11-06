@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-#!/usr/bin/env python3
 """MCPM v5.0 GUI – Beautiful Modern Interface."""
 
 from PyQt6.QtWidgets import (
@@ -27,6 +26,7 @@ from PyQt6.QtCore import (
     QPropertyAnimation,
     QPoint,
     QPointF,
+    QRectF,
     QSize,
     QTimer,
     Qt,
@@ -354,7 +354,7 @@ class AnimatedButton(QPushButton):
             gradient.setColorAt((shift + 1.0) % 1.0, QColor(self.gradient[0]))
 
             path = QPainterPath()
-            path.addRoundedRect(rect, 14, 14)
+            path.addRoundedRect(QRectF(rect), 14, 14)
 
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(gradient)

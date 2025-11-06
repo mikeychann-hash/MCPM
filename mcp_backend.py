@@ -56,23 +56,35 @@ class FileChangeHandler(FileSystemEventHandler):
 class MemoryStore:
     def __init__(self, memory_file: Path, config: Dict):
         self.memory_file = memory_file
-        self.memories = self._load()
-        self.context = []
         self.limit = config.get('context_limit', 20)
+        loaded_data = self._load()
+        self.memories = loaded_data.get('memories', {}) if isinstance(loaded_data, dict) else loaded_data
+        self.context = loaded_data.get('context', []) if isinstance(loaded_data, dict) else []
 
     def _load(self):
         if self.memory_file.exists():
             try:
-                return json.loads(self.memory_file.read_text())
+                data = json.loads(self.memory_file.read_text())
+                # Handle both old format (just memories) and new format (memories + context)
+                if isinstance(data, dict) and 'memories' in data:
+                    return data
+                else:
+                    # Old format - just memories dict
+                    return {'memories': data, 'context': []}
             except Exception as e:
                 logger.error(f"Memory load error: {e}")
-                return {}
-        return {}
+                return {'memories': {}, 'context': []}
+        return {'memories': {}, 'context': []}
 
     def _save(self):
         try:
             logger.debug(f"💾 Saving memory to: {self.memory_file.resolve()}")
-            self.memory_file.write_text(json.dumps(self.memories, indent=2))
+            # Save both memories and context to persist all data
+            full_data = {
+                "memories": self.memories,
+                "context": self.context
+            }
+            self.memory_file.write_text(json.dumps(full_data, indent=2))
             # Verify write succeeded
             if self.memory_file.exists():
                 size = self.memory_file.stat().st_size
