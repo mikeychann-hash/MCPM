@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
+    QAbstractAnimation,
     QPoint,
     QPointF,
     QRectF,
@@ -580,10 +581,10 @@ class AnimatedStatusLabel(QLabel):
         self._indicator_color = color
         self.setText(message)
         if status in {"running", "warning"}:
-            if self._pulse_anim.state() != QPropertyAnimation.Running:
+            if self._pulse_anim.state() != QAbstractAnimation.State.Running:
                 self._pulse_anim.start()
         else:
-            if self._pulse_anim.state() == QPropertyAnimation.Running:
+            if self._pulse_anim.state() == QAbstractAnimation.State.Running:
                 self._pulse_anim.stop()
                 self._pulse_anim.start()
                 self._pulse_anim.stop()
