@@ -151,10 +151,63 @@ class LLMBackend:
                             return f"Grok API Error {r.status}: {txt}"
                         resp = await r.json()
                         return resp['choices'][0]['message']['content']
-            # OpenAI, Claude, Ollama can be added similarly
+
+            elif provider == "openai":
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    return "Error: OPENAI_API_KEY not set"
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                data = {"model": model, "messages": [{"role": "user", "content": full_prompt}]}
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
+                        if r.status != 200:
+                            txt = await r.text()
+                            return f"OpenAI API Error {r.status}: {txt}"
+                        resp = await r.json()
+                        return resp['choices'][0]['message']['content']
+
+            elif provider == "claude":
+                api_key = os.getenv("ANTHROPIC_API_KEY")
+                if not api_key:
+                    return "Error: ANTHROPIC_API_KEY not set"
+                headers = {
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": full_prompt}],
+                    "max_tokens": 4096
+                }
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(f"{base_url}/messages", json=data, headers=headers) as r:
+                        if r.status != 200:
+                            txt = await r.text()
+                            return f"Claude API Error {r.status}: {txt}"
+                        resp = await r.json()
+                        return resp['content'][0]['text']
+
+            elif provider == "ollama":
+                # Ollama doesn't require an API key (local)
+                headers = {"Content-Type": "application/json"}
+                data = {"model": model, "messages": [{"role": "user", "content": full_prompt}]}
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
+                        if r.status != 200:
+                            txt = await r.text()
+                            return f"Ollama API Error {r.status}: {txt}"
+                        resp = await r.json()
+                        return resp['choices'][0]['message']['content']
+
             else:
-                return f"Provider '{provider}' not active."
+                return f"Provider '{provider}' not supported."
+        except aiohttp.ClientError as e:
+            return f"Network error: {str(e)}"
+        except asyncio.TimeoutError:
+            return "Error: Request timed out"
         except Exception as e:
+            logger.error(f"LLM query error: {e}", exc_info=True)
             return f"Error: {str(e)}"
 
 # --------------------------------------------------------------------------- #

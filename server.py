@@ -56,8 +56,19 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Configure CORS - restrict in production!
+# Configure CORS - SECURITY WARNING!
+# Default "*" allows ALL origins - ONLY for development
+# For production, set CORS_ORIGINS environment variable to specific domains
+# Example: CORS_ORIGINS="https://yourdomain.com,https://app.yourdomain.com"
 ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+if "*" in ALLOWED_ORIGINS:
+    logger.warning("=" * 80)
+    logger.warning("🚨 SECURITY WARNING: CORS allows ALL origins (*)")
+    logger.warning("This is INSECURE for production deployments!")
+    logger.warning("Set CORS_ORIGINS environment variable to restrict access.")
+    logger.warning("Example: export CORS_ORIGINS='https://yourdomain.com'")
+    logger.warning("=" * 80)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
