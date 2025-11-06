@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-#!/usr/bin/env python3
 """MCPM v5.0 GUI – Beautiful Modern Interface."""
 
 from PyQt6.QtWidgets import (
