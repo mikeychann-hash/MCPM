@@ -511,7 +511,6 @@ class ModernTabWidget(QTabWidget):
                 border-top-right-radius: 12px;
                 font-size: 14px;
                 font-weight: 600;
-                transition: all 220ms ease;
             }
             QTabBar::tab:selected {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -751,8 +750,9 @@ class FGDGUI(QWidget):
             wave = (math.sin(self._header_phase * 2 * math.pi) + 1) / 2
             color_a = _mix_hex("#667eea", "#764ba2", wave)
             color_b = _mix_hex("#764ba2", "#f093fb", 1 - wave * 0.6)
+            animated_color = _mix_hex(color_a, color_b, 0.5)
             if hasattr(self, "header") and hasattr(self, "_header_style_template"):
-                self.header.setStyleSheet(self._header_style_template.format(color_a=color_a, color_b=color_b))
+                self.header.setStyleSheet(self._header_style_template.format(color=animated_color))
         except Exception as e:
             logger.error(f"Error in header gradient animation: {e}")
 
@@ -761,23 +761,28 @@ class FGDGUI(QWidget):
         self.header = QLabel("MCPM v5.0 – AI Code Co‑Pilot 🚀")
         self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.header.setMinimumHeight(82)
+
+        header_font = self.header.font()
+        header_font.setPointSize(38)
+        header_font.setWeight(QFont.Weight.Black)
+        header_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.0)
+        self.header.setFont(header_font)
+        self.header.setContentsMargins(0, 0, 0, 12)
+
         self._header_style_template = """
-            font-size: 38px;
-            font-weight: 800;
-            margin: 0 0 12px 0;
-            letter-spacing: 2px;
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 {color_a}, stop:0.5 #764ba2, stop:1 {color_b});
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            color: {color_a};
+            color: {color};
         """
-        self.header.setStyleSheet(self._header_style_template.format(color_a="#667eea", color_b="#f093fb"))
+        initial_color = _mix_hex("#667eea", "#f093fb", 0.5)
+        self.header.setStyleSheet(self._header_style_template.format(color=initial_color))
         self.main_layout.addWidget(self.header)
 
         subtitle = QLabel("A modern mission control for your MCP server")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setStyleSheet("color: rgba(240, 246, 252, 0.75); font-size: 16px; margin-bottom: 16px;")
+        subtitle_font = subtitle.font()
+        subtitle_font.setPointSize(16)
+        subtitle.setFont(subtitle_font)
+        subtitle.setContentsMargins(0, 0, 0, 16)
+        subtitle.setStyleSheet("color: rgba(240, 246, 252, 0.75);")
         self.main_layout.addWidget(subtitle)
 
     def _create_main_tabs(self) -> QWidget:
