@@ -1,106 +1,739 @@
 <!DOCTYPE html>
-<html data-theme="dark">
+<html lang="en" data-theme="dark">
 <head>
-  <meta charset="UTF-8" />
-  <title>FGD Stack</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="MCPM v6.0 - Neo Cyber AI Co-Pilot">
+  <title>MCPM v6.0 – Neo Cyber AI Co-Pilot ✨</title>
   <style>
-    :root { --bg: #0d1117; --card: #161b22; --text: #f0f6fc; --accent: #58a6ff; --border: #30363d; --log-bg: #010409; }
-    [data-theme="light"] { --bg: #f7f9fc; --card: #ffffff; --text: #24292f; --accent: #0969da; --border: #d0d7de; --log-bg: #f6f8fa; }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: -apple-system, sans-serif; padding: 2rem; }
-    .container { max-width: 800px; margin: 0 auto; }
-    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
-    button, input, select { padding: 0.65rem; margin: 0.4rem 0; border-radius: 8px; width: 100%; font-size: 1rem; }
-    button { background: var(--accent); color: white; border: none; cursor: pointer; }
-    .suggestion { background: rgba(88,166,255,0.1); padding: 0.6rem; border-radius: 6px; margin: 0.3rem 0; cursor: pointer; }
-    #logViewer { background: var(--log-bg); height: 300px; overflow-y: auto; padding: 0.75rem; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; }
-    .theme-toggle { position: fixed; top: 1rem; right: 1rem; width: 40px; height: 40px; background: var(--card); border: 1px solid var(--border); border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+    /* ============================================================================ */
+    /* NEO CYBER COLOR PALETTE - Modern 2025 Design System */
+    /* ============================================================================ */
+    :root {
+      /* Primary colors */
+      --primary: #6366f1;
+      --secondary: #8b5cf6;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --error: #ef4444;
+      --info: #3b82f6;
+
+      /* Backgrounds */
+      --bg-deep: #0a0a0f;
+      --bg-card: #18181b;
+      --bg-elevated: #27272a;
+      --bg-glass: rgba(24, 24, 27, 0.7);
+
+      /* Text colors */
+      --text-primary: #fafafa;
+      --text-secondary: #a1a1aa;
+      --text-muted: #71717a;
+
+      /* Borders */
+      --border-default: rgba(99, 102, 241, 0.2);
+      --border-hover: rgba(99, 102, 241, 0.4);
+      --border-focus: rgba(99, 102, 241, 0.6);
+
+      /* Shadows */
+      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
+      --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    [data-theme="light"] {
+      --bg-deep: #f7f9fc;
+      --bg-card: #ffffff;
+      --bg-elevated: #f3f4f6;
+      --bg-glass: rgba(255, 255, 255, 0.7);
+      --text-primary: #1f2937;
+      --text-secondary: #6b7280;
+      --text-muted: #9ca3af;
+      --border-default: rgba(99, 102, 241, 0.15);
+      --border-hover: rgba(99, 102, 241, 0.3);
+      --border-focus: rgba(99, 102, 241, 0.5);
+    }
+
+    /* ============================================================================ */
+    /* RESET & BASE STYLES */
+    /* ============================================================================ */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: linear-gradient(135deg, var(--bg-deep) 0%, #0f0f14 50%, var(--bg-deep) 100%);
+      color: var(--text-primary);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      padding: 2rem 1rem;
+      min-height: 100vh;
+      transition: background 0.3s ease;
+    }
+
+    /* ============================================================================ */
+    /* TYPOGRAPHY */
+    /* ============================================================================ */
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      text-align: center;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.5px;
+    }
+
+    h2 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 1rem;
+    }
+
+    h3 {
+      font-size: 1.125rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 0.75rem;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 1rem;
+      margin-bottom: 2.5rem;
+    }
+
+    /* ============================================================================ */
+    /* LAYOUT */
+    /* ============================================================================ */
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      animation: fadeIn 0.6s ease-out;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1.5px solid var(--border-default);
+      border-radius: 16px;
+      padding: 1.75rem;
+      margin-bottom: 1.5rem;
+      box-shadow: var(--shadow-md);
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--primary), var(--secondary));
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .card:hover {
+      border-color: var(--border-hover);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .card:hover::before {
+      opacity: 1;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    /* ============================================================================ */
+    /* FORM ELEMENTS */
+    /* ============================================================================ */
+    button, input, select {
+      font-family: inherit;
+      font-size: 0.9375rem;
+      border-radius: 12px;
+      border: none;
+      outline: none;
+      transition: all 0.25s ease;
+    }
+
+    button {
+      padding: 0.875rem 1.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      color: white;
+      box-shadow: var(--shadow-sm);
+      position: relative;
+      overflow: hidden;
+    }
+
+    button::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, var(--secondary), var(--info));
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    button:hover::before {
+      opacity: 1;
+    }
+
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-md);
+    }
+
+    button:active {
+      transform: translateY(0);
+    }
+
+    button span {
+      position: relative;
+      z-index: 1;
+    }
+
+    button.secondary {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1.5px solid var(--border-default);
+    }
+
+    button.secondary::before {
+      background: var(--bg-card);
+    }
+
+    button.success {
+      background: linear-gradient(135deg, var(--success), #16c784);
+    }
+
+    button.error {
+      background: linear-gradient(135deg, var(--error), #f87171);
+    }
+
+    input, select {
+      padding: 0.875rem 1.25rem;
+      background: var(--bg-deep);
+      color: var(--text-primary);
+      border: 1.5px solid var(--border-default);
+      width: 100%;
+    }
+
+    input:focus, select:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    }
+
+    input::placeholder {
+      color: var(--text-muted);
+    }
+
+    /* ============================================================================ */
+    /* COMPONENTS */
+    /* ============================================================================ */
+    .theme-toggle {
+      position: fixed;
+      top: 1.5rem;
+      right: 1.5rem;
+      width: 48px;
+      height: 48px;
+      background: var(--bg-card);
+      border: 1.5px solid var(--border-default);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 1.25rem;
+      box-shadow: var(--shadow-md);
+      transition: all 0.3s ease;
+      z-index: 1000;
+    }
+
+    .theme-toggle:hover {
+      transform: rotate(180deg) scale(1.1);
+      border-color: var(--border-hover);
+    }
+
+    .suggestion {
+      background: var(--bg-elevated);
+      padding: 0.875rem 1.125rem;
+      border-radius: 10px;
+      margin: 0.5rem 0;
+      cursor: pointer;
+      border: 1.5px solid transparent;
+      transition: all 0.25s ease;
+      font-size: 0.9375rem;
+    }
+
+    .suggestion:hover {
+      background: var(--bg-card);
+      border-color: var(--border-hover);
+      transform: translateX(4px);
+    }
+
+    .status {
+      padding: 1.25rem;
+      border-radius: 12px;
+      margin-top: 1.5rem;
+      font-size: 0.9375rem;
+      border: 1.5px solid;
+      animation: slideIn 0.4s ease-out;
+    }
+
+    .status.success {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(22, 199, 132, 0.05));
+      border-color: var(--success);
+      color: var(--success);
+    }
+
+    .status.error {
+      background: linear-gradient(135deg, rgba(239, 68, 68, 0.1), rgba(248, 113, 113, 0.05));
+      border-color: var(--error);
+      color: var(--error);
+    }
+
+    #logViewer {
+      background: var(--bg-deep);
+      border: 1.5px solid var(--border-default);
+      border-radius: 12px;
+      height: 400px;
+      overflow-y: auto;
+      padding: 1.25rem;
+      font-family: 'Fira Code', 'Consolas', monospace;
+      font-size: 0.875rem;
+      white-space: pre-wrap;
+      line-height: 1.6;
+      box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+    }
+
+    #logViewer::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    #logViewer::-webkit-scrollbar-track {
+      background: var(--bg-elevated);
+      border-radius: 4px;
+    }
+
+    #logViewer::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, var(--primary), var(--secondary));
+      border-radius: 4px;
+    }
+
+    .log-filters {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+
+    .log-filters label {
+      color: var(--text-secondary);
+      font-weight: 600;
+      font-size: 0.875rem;
+    }
+
+    .log-filters select,
+    .log-filters input {
+      flex: 1;
+      min-width: 120px;
+      padding: 0.625rem 1rem;
+      font-size: 0.875rem;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.375rem 0.75rem;
+      border-radius: 8px;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      border: 1px solid var(--border-default);
+    }
+
+    .badge.active {
+      background: linear-gradient(135deg, var(--success), #16c784);
+      color: white;
+      border-color: transparent;
+    }
+
+    /* ============================================================================ */
+    /* ANIMATIONS */
+    /* ============================================================================ */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateX(-20px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .loading {
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    /* ============================================================================ */
+    /* RESPONSIVE */
+    /* ============================================================================ */
+    @media (max-width: 768px) {
+      body {
+        padding: 1rem 0.75rem;
+      }
+
+      h1 {
+        font-size: 2rem;
+      }
+
+      .card {
+        padding: 1.25rem;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .theme-toggle {
+        top: 1rem;
+        right: 1rem;
+      }
+
+      .log-filters {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .log-filters select,
+      .log-filters input {
+        width: 100%;
+      }
+    }
+
+    /* ============================================================================ */
+    /* UTILITIES */
+    /* ============================================================================ */
+    .hidden {
+      display: none;
+    }
+
+    .text-center {
+      text-align: center;
+    }
+
+    .flex {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+
+    .flex-between {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .mt-1 { margin-top: 0.5rem; }
+    .mt-2 { margin-top: 1rem; }
+    .mb-1 { margin-bottom: 0.5rem; }
+    .mb-2 { margin-bottom: 1rem; }
   </style>
 </head>
 <body>
-  <div class="theme-toggle" id="themeToggle">Dark Mode</div>
+  <!-- Theme Toggle -->
+  <div class="theme-toggle" id="themeToggle" title="Toggle theme">🌙</div>
+
   <div class="container">
-    <h1>FGD Stack</h1>
+    <!-- Header -->
+    <h1>MCPM v6.0 – Neo Cyber AI Co-Pilot ✨</h1>
+    <p class="subtitle">Ultra-Modern Mission Control • Real-Time Intelligence • Seamless Integration</p>
+
+    <!-- Directory Selection -->
     <div class="card">
-      <h3>1. Select Directory</h3>
+      <h3>📂 Project Directory</h3>
       <input type="file" id="dirPicker" webkitdirectory directory style="display:none">
-      <button onclick="document.getElementById('dirPicker').click()">Browse...</button>
-      <div id="selectedPath"></div>
+      <button onclick="document.getElementById('dirPicker').click()" class="secondary">
+        <span>📁 Browse for Directory</span>
+      </button>
+      <div id="selectedPath" class="mt-2"></div>
     </div>
-    <div class="card">
-      <h3>2. Git Repos</h3>
-      <div id="suggestions"></div>
+
+    <!-- Git Repos & LLM Provider Grid -->
+    <div class="grid">
+      <div class="card">
+        <h3>🔗 Git Repositories</h3>
+        <div id="suggestions"></div>
+      </div>
+
+      <div class="card">
+        <h3>🤖 LLM Provider</h3>
+        <select id="provider">
+          <option value="grok">Grok (xAI)</option>
+          <option value="openai">ChatGPT (OpenAI)</option>
+          <option value="claude">Claude (Anthropic)</option>
+          <option value="ollama">Ollama (Local)</option>
+        </select>
+      </div>
     </div>
-    <div class="card">
-      <h3>3. LLM</h3>
-      <select id="provider"><option value="grok">Grok</option><option value="openai">ChatGPT</option></select>
-    </div>
-    <button onclick="startServer()" id="startBtn">Launch Server</button>
+
+    <!-- Launch Server -->
+    <button onclick="startServer()" id="startBtn" class="success">
+      <span>▶️ Launch MCP Server</span>
+    </button>
+
     <div id="status"></div>
 
-    <div class="card" id="logCard" style="display:none;">
-      <h3>Live Logs 
-        <span style="float:right;font-size:0.8rem;">
-          <select id="levelFilter" style="padding:0.3rem;"><option value="">All</option><option>INFO</option><option>ERROR</option></select>
-          <input id="searchFilter" placeholder="Search..." style="width:120px;padding:0.3rem;margin-left:0.5rem;">
-          <button onclick="clearFilters()" style="padding:0.3rem 0.5rem;margin-left:0.3rem;">Clear</button>
-        </span>
-      </h3>
-      <div id="logViewer"></div>
+    <!-- Live Logs -->
+    <div class="card hidden" id="logCard">
+      <div class="flex-between mb-2">
+        <h3>📋 Live Server Logs</h3>
+        <span class="badge active" id="logStatus">● Live</span>
+      </div>
+
+      <div class="log-filters">
+        <label>Level:</label>
+        <select id="levelFilter">
+          <option value="">All Levels</option>
+          <option value="INFO">INFO</option>
+          <option value="WARNING">WARNING</option>
+          <option value="ERROR">ERROR</option>
+        </select>
+
+        <label>Search:</label>
+        <input id="searchFilter" type="text" placeholder="Filter logs...">
+
+        <button onclick="clearFilters()" class="secondary" style="padding: 0.625rem 1rem;">
+          <span>Clear</span>
+        </button>
+      </div>
+
+      <div id="logViewer" class="loading">Loading logs...</div>
     </div>
   </div>
 
   <script>
-    let allLogLines = [], logInterval;
+    // ============================================================================
+    // STATE MANAGEMENT
+    // ============================================================================
+    let allLogLines = [];
+    let logInterval = null;
+    let selectedDir = null;
+
+    // ============================================================================
+    // THEME MANAGEMENT
+    // ============================================================================
     const themeToggle = document.getElementById('themeToggle');
+    const htmlElement = document.documentElement;
+
+    // Load saved theme
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    htmlElement.setAttribute('data-theme', savedTheme);
+    updateThemeIcon(savedTheme);
+
     themeToggle.onclick = () => {
-      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-      document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
-      themeToggle.textContent = isDark ? 'Light Mode' : 'Dark Mode';
+      const currentTheme = htmlElement.getAttribute('data-theme');
+      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+      htmlElement.setAttribute('data-theme', newTheme);
+      localStorage.setItem('theme', newTheme);
+      updateThemeIcon(newTheme);
     };
 
-    document.getElementById('dirPicker').onchange = () => {
-      const entry = document.getElementById('dirPicker').webkitEntries?.[0];
-      if (entry) window.selectedDir = entry.fullPath || entry.name;
-      document.getElementById('selectedPath').innerHTML = `<strong>Selected:</strong> ${window.selectedDir || 'None'}`;
+    function updateThemeIcon(theme) {
+      themeToggle.textContent = theme === 'dark' ? '🌙' : '☀️';
+      themeToggle.title = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    }
+
+    // ============================================================================
+    // DIRECTORY SELECTION
+    // ============================================================================
+    document.getElementById('dirPicker').onchange = (e) => {
+      const files = e.target.files;
+      if (files.length > 0) {
+        const path = files[0].webkitRelativePath.split('/')[0];
+        selectedDir = path;
+        document.getElementById('selectedPath').innerHTML = `
+          <div class="flex" style="background: var(--bg-elevated); padding: 0.75rem 1rem; border-radius: 10px; margin-top: 0.75rem;">
+            <span style="color: var(--success);">✓</span>
+            <strong style="color: var(--text-primary);">Selected:</strong>
+            <span style="color: var(--text-secondary); font-family: monospace;">${path}</span>
+          </div>
+        `;
+      }
     };
 
+    // ============================================================================
+    // LOAD GIT REPO SUGGESTIONS
+    // ============================================================================
     async function loadSuggestions() {
-      const res = await fetch('/api/suggest');
-      const paths = await res.json();
-      document.getElementById('suggestions').innerHTML = paths.map(p => 
-        `<div class="suggestion" onclick="window.selectedDir='${p}'; document.getElementById('selectedPath').innerHTML='<strong>Selected:</strong> ${p}'">${p}</div>`
-      ).join('');
+      try {
+        const res = await fetch('/api/suggest');
+        const paths = await res.json();
+        const container = document.getElementById('suggestions');
+
+        if (paths.length === 0) {
+          container.innerHTML = '<p style="color: var(--text-muted); font-size: 0.875rem;">No git repositories found</p>';
+          return;
+        }
+
+        container.innerHTML = paths.map(p =>
+          `<div class="suggestion" onclick="selectRepo('${p}')">
+            <strong style="color: var(--text-primary);">📁</strong> ${p}
+          </div>`
+        ).join('');
+      } catch (error) {
+        console.error('Failed to load suggestions:', error);
+        document.getElementById('suggestions').innerHTML =
+          '<p style="color: var(--text-muted); font-size: 0.875rem;">Could not load repositories</p>';
+      }
     }
 
+    function selectRepo(path) {
+      selectedDir = path;
+      document.getElementById('selectedPath').innerHTML = `
+        <div class="flex" style="background: var(--bg-elevated); padding: 0.75rem 1rem; border-radius: 10px; margin-top: 0.75rem;">
+          <span style="color: var(--success);">✓</span>
+          <strong style="color: var(--text-primary);">Selected:</strong>
+          <span style="color: var(--text-secondary); font-family: monospace;">${path}</span>
+        </div>
+      `;
+    }
+
+    // ============================================================================
+    // START SERVER
+    // ============================================================================
     async function startServer() {
-      const dir = window.selectedDir || document.getElementById('selectedPath').innerText.replace(/.*:\s*/, '');
+      const dir = selectedDir;
       const provider = document.getElementById('provider').value;
-      if (!dir || dir === 'None') return alert("Select a directory");
-      const res = await fetch('/api/start', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({watch_dir: dir, default_provider: provider}) });
-      const result = await res.json();
-      document.getElementById('status').innerHTML = result.success ? 
-        `<div style="background:#e8f5e9;color:#2e7d32;padding:1rem;border-radius:8px;">
-          Server running!<br>Memory: ${result.memory_file}<br>
-          <a href="#" onclick="showLogs('${result.log_file}'); return false;">View Live Logs</a>
-        </div>` : 
-        `<div style="background:#ffebee;color:#c62828;padding:1rem;border-radius:8px;">Error: ${result.error}</div>`;
+      const statusDiv = document.getElementById('status');
+      const startBtn = document.getElementById('startBtn');
+
+      if (!dir) {
+        statusDiv.innerHTML = `
+          <div class="status error">
+            <strong>❌ Error:</strong> Please select a project directory first
+          </div>
+        `;
+        return;
+      }
+
+      // Show loading state
+      startBtn.disabled = true;
+      startBtn.innerHTML = '<span>🔄 Launching...</span>';
+      startBtn.classList.add('loading');
+
+      try {
+        const res = await fetch('/api/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            watch_dir: dir,
+            default_provider: provider
+          })
+        });
+
+        const result = await res.json();
+
+        startBtn.disabled = false;
+        startBtn.classList.remove('loading');
+        startBtn.innerHTML = '<span>▶️ Launch MCP Server</span>';
+
+        if (result.success) {
+          statusDiv.innerHTML = `
+            <div class="status success">
+              <strong>✅ Server Running!</strong>
+              <div style="margin-top: 0.75rem; font-size: 0.875rem;">
+                <div>💾 Memory: <code>${result.memory_file}</code></div>
+                <div style="margin-top: 0.5rem;">
+                  <a href="#" onclick="showLogs('${result.log_file}'); return false;"
+                     style="color: var(--success); text-decoration: underline; font-weight: 600;">
+                    📋 View Live Logs →
+                  </a>
+                </div>
+              </div>
+            </div>
+          `;
+        } else {
+          statusDiv.innerHTML = `
+            <div class="status error">
+              <strong>❌ Error:</strong> ${result.error || 'Failed to start server'}
+            </div>
+          `;
+        }
+      } catch (error) {
+        console.error('Start server error:', error);
+        startBtn.disabled = false;
+        startBtn.classList.remove('loading');
+        startBtn.innerHTML = '<span>▶️ Launch MCP Server</span>';
+        statusDiv.innerHTML = `
+          <div class="status error">
+            <strong>❌ Network Error:</strong> Could not connect to server
+          </div>
+        `;
+      }
     }
 
+    // ============================================================================
+    // LOG VIEWING
+    // ============================================================================
     function showLogs(file) {
       const card = document.getElementById('logCard');
       const viewer = document.getElementById('logViewer');
-      card.style.display = 'block';
-      viewer.innerHTML = 'Loading...\n';
+      card.classList.remove('hidden');
+      viewer.innerHTML = 'Connecting to log stream...\n';
+      viewer.classList.add('loading');
       allLogLines = [];
+
+      // Scroll to logs
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+      // Clear existing interval
       if (logInterval) clearInterval(logInterval);
+
+      // Start polling for logs
       logInterval = setInterval(async () => {
-        const res = await fetch(`/api/logs?file=${encodeURIComponent(file)}&t=${Date.now()}`);
-        const text = await res.text();
-        const lines = text.trim().split('\n');
-        const newLines = lines.slice(allLogLines.length);
-        allLogLines.push(...newLines);
-        applyFilters();
+        try {
+          const res = await fetch(`/api/logs?file=${encodeURIComponent(file)}&t=${Date.now()}`);
+          const text = await res.text();
+          const lines = text.trim().split('\n').filter(l => l.trim());
+
+          if (lines.length > allLogLines.length) {
+            const newLines = lines.slice(allLogLines.length);
+            allLogLines.push(...newLines);
+            applyFilters();
+            viewer.classList.remove('loading');
+          }
+        } catch (error) {
+          console.error('Log fetch error:', error);
+          viewer.innerHTML = '❌ Error fetching logs. Server may be stopped.';
+          viewer.classList.remove('loading');
+        }
       }, 1500);
     }
 
@@ -108,14 +741,42 @@
       const level = document.getElementById('levelFilter').value;
       const search = document.getElementById('searchFilter').value.toLowerCase();
       const viewer = document.getElementById('logViewer');
+
       const filtered = allLogLines.filter(l => {
         if (level && !l.includes(level)) return false;
         if (search && !l.toLowerCase().includes(search)) return false;
         return true;
       });
-      viewer.innerHTML = filtered.map(l => search && l.toLowerCase().includes(search) ? 
-        `<span style="background:#fffbe6;padding:0 2px;">${l.replace(/</g, '&lt;')}</span>` : 
-        l.replace(/</g, '&lt;')).join('\n');
+
+      if (filtered.length === 0) {
+        viewer.innerHTML = '📭 No logs match the current filters';
+        return;
+      }
+
+      viewer.innerHTML = filtered.map(l => {
+        let line = l.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        // Highlight search term
+        if (search && l.toLowerCase().includes(search)) {
+          const regex = new RegExp(`(${search})`, 'gi');
+          line = line.replace(regex, '<span style="background: var(--warning); color: var(--bg-deep); padding: 0 4px; border-radius: 4px;">$1</span>');
+        }
+
+        // Color code log levels
+        if (line.includes('ERROR')) {
+          line = `<span style="color: var(--error);">${line}</span>`;
+        } else if (line.includes('WARNING')) {
+          line = `<span style="color: var(--warning);">${line}</span>`;
+        } else if (line.includes('INFO')) {
+          line = `<span style="color: var(--info);">${line}</span>`;
+        } else if (line.includes('✅') || line.includes('success')) {
+          line = `<span style="color: var(--success);">${line}</span>`;
+        }
+
+        return line;
+      }).join('\n');
+
+      // Auto-scroll to bottom
       viewer.scrollTop = viewer.scrollHeight;
     }
 
@@ -125,10 +786,25 @@
       applyFilters();
     }
 
+    // Event listeners for filters
     document.getElementById('levelFilter').onchange = applyFilters;
-    document.getElementById('searchFilter').oninput = () => setTimeout(applyFilters, 300);
+    document.getElementById('searchFilter').oninput = () => {
+      clearTimeout(window.filterTimeout);
+      window.filterTimeout = setTimeout(applyFilters, 300);
+    };
 
-    loadSuggestions();
+    // ============================================================================
+    // INITIALIZATION
+    // ============================================================================
+    window.addEventListener('load', () => {
+      loadSuggestions();
+      console.log('🚀 MCPM v6.0 Neo Cyber UI loaded');
+    });
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+      if (logInterval) clearInterval(logInterval);
+    });
   </script>
 </body>
 </html>
