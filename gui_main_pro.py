@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""MCPM v5.0 GUI – Beautiful Modern Interface."""
+"""MCPM v6.0 GUI – Ultra-Modern Interface with Neo Cyber Design."""
 
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
+    QGraphicsBlurEffect,
     QHBoxLayout,
     QFileDialog,
     QLabel,
@@ -20,6 +21,9 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
+    QShortcut,
+    QDialog,
+    QCheckBox,
 )
 from PyQt6.QtCore import (
     QEasingCurve,
@@ -31,6 +35,8 @@ from PyQt6.QtCore import (
     QTimer,
     Qt,
     pyqtProperty,
+    pyqtSignal,
+    QSettings,
 )
 from PyQt6.QtGui import (
     QColor,
@@ -43,6 +49,8 @@ from PyQt6.QtGui import (
     QTextCharFormat,
     QTextCursor,
     QSyntaxHighlighter,
+    QKeySequence,
+    QAction,
 )
 from pathlib import Path
 import sys
@@ -72,13 +80,64 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# ============================================================================
+# NEO CYBER COLOR PALETTE - Modern 2025 Design System
+# ============================================================================
+class NeoCyberColors:
+    """Centralized color palette for the Neo Cyber design system."""
+
+    # Primary colors
+    PRIMARY = "#6366f1"      # Indigo - Main brand color
+    SECONDARY = "#8b5cf6"    # Purple - Accent color
+    SUCCESS = "#10b981"      # Emerald - Positive actions
+    WARNING = "#f59e0b"      # Amber - Alerts
+    ERROR = "#ef4444"        # Red - Errors
+    INFO = "#3b82f6"         # Blue - Information
+
+    # Backgrounds
+    BG_DEEP = "#0a0a0f"      # Deepest background
+    BG_CARD = "#18181b"      # Card background (Zinc-900)
+    BG_ELEVATED = "#27272a"  # Elevated elements (Zinc-800)
+    BG_GLASS = "rgba(24, 24, 27, 0.7)"  # Glassmorphism
+
+    # Text colors
+    TEXT_PRIMARY = "#fafafa"    # Zinc-50 - Main text
+    TEXT_SECONDARY = "#a1a1aa"  # Zinc-400 - Secondary text
+    TEXT_MUTED = "#71717a"      # Zinc-500 - Muted text
+
+    # Borders
+    BORDER_DEFAULT = "rgba(99, 102, 241, 0.2)"
+    BORDER_HOVER = "rgba(99, 102, 241, 0.4)"
+    BORDER_FOCUS = "rgba(99, 102, 241, 0.6)"
+
+    # Syntax highlighting (modern palette)
+    SYNTAX_KEYWORD = "#c792ea"     # Purple
+    SYNTAX_STRING = "#c3e88d"      # Green
+    SYNTAX_NUMBER = "#f78c6c"      # Orange
+    SYNTAX_COMMENT = "#546e7a"     # Gray-blue
+    SYNTAX_FUNCTION = "#82aaff"    # Blue
+    SYNTAX_CLASS = "#ffcb6b"       # Yellow
+
+COLORS = NeoCyberColors()
+
 def _color(hex_color: str, alpha: int = 255) -> QColor:
+    """Create a QColor from hex string with optional alpha."""
+    # Handle rgba strings
+    if hex_color.startswith("rgba"):
+        # Extract rgba values
+        parts = hex_color.replace("rgba(", "").replace(")", "").split(",")
+        if len(parts) == 4:
+            r, g, b = [int(x.strip()) for x in parts[:3]]
+            a = int(float(parts[3].strip()) * 255)
+            return QColor(r, g, b, a)
+
     color = QColor(hex_color)
     color.setAlpha(alpha)
     return color
 
 
 def _mix_hex(color_a: str, color_b: str, progress: float) -> str:
+    """Mix two hex colors with a progress value (0.0 to 1.0)."""
     progress = max(0.0, min(1.0, progress))
     start = QColor(color_a)
     end = QColor(color_b)
@@ -166,55 +225,64 @@ class PythonHighlighter(QSyntaxHighlighter):
         super().__init__(document)
         self.highlighting_rules: List[tuple[re.Pattern, QTextCharFormat]] = []
 
+        # Keywords - Modern purple
         keyword_format = QTextCharFormat()
-        keyword_format.setForeground(_color("#bd93f9"))
+        keyword_format.setForeground(_color(COLORS.SYNTAX_KEYWORD))
         keyword_format.setFontWeight(QFont.Weight.Bold)
         for keyword in self.KEYWORDS:
             self.highlighting_rules.append((re.compile(rf"\b{keyword}\b"), keyword_format))
 
+        # Builtins - Modern blue
         builtin_format = QTextCharFormat()
-        builtin_format.setForeground(_color("#8be9fd"))
+        builtin_format.setForeground(_color(COLORS.SYNTAX_FUNCTION))
         for builtin in self.BUILTINS:
             self.highlighting_rules.append((re.compile(rf"\b{builtin}\b"), builtin_format))
 
+        # Decorators - Secondary accent
         decorator_format = QTextCharFormat()
-        decorator_format.setForeground(_color("#ff79c6"))
+        decorator_format.setForeground(_color(COLORS.SECONDARY))
         decorator_format.setFontWeight(QFont.Weight.Bold)
         self.highlighting_rules.append((re.compile(r"@[_A-Za-z][_A-Za-z0-9.]*"), decorator_format))
 
+        # Classes - Yellow
         class_format = QTextCharFormat()
-        class_format.setForeground(_color("#50fa7b"))
+        class_format.setForeground(_color(COLORS.SYNTAX_CLASS))
         class_format.setFontWeight(QFont.Weight.Bold)
         self.highlighting_rules.append((re.compile(r"\bclass\s+([_A-Za-z][_A-Za-z0-9]*)"), class_format))
 
+        # Functions - Blue
         function_format = QTextCharFormat()
-        function_format.setForeground(_color("#50fa7b"))
+        function_format.setForeground(_color(COLORS.SYNTAX_FUNCTION))
         self.highlighting_rules.append((re.compile(r"\bdef\s+([_A-Za-z][_A-Za-z0-9]*)"), function_format))
 
+        # Numbers - Orange
         number_format = QTextCharFormat()
-        number_format.setForeground(_color("#f1fa8c"))
+        number_format.setForeground(_color(COLORS.SYNTAX_NUMBER))
         self.highlighting_rules.append((re.compile(r"\b0[bB][01_]+\b"), number_format))
         self.highlighting_rules.append((re.compile(r"\b0[oO][0-7_]+\b"), number_format))
         self.highlighting_rules.append((re.compile(r"\b0[xX][0-9a-fA-F_]+\b"), number_format))
         self.highlighting_rules.append((re.compile(r"\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?j?\b"), number_format))
 
+        # Strings - Green
         single_string_format = QTextCharFormat()
-        single_string_format.setForeground(_color("#f1fa8c"))
+        single_string_format.setForeground(_color(COLORS.SYNTAX_STRING))
         self.highlighting_rules.append((re.compile(r"'[^'\\]*(?:\\.[^'\\]*)*'"), single_string_format))
         self.highlighting_rules.append((re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"'), single_string_format))
 
+        # Comments - Muted gray-blue
         comment_format = QTextCharFormat()
-        comment_format.setForeground(_color("#6272a4"))
+        comment_format.setForeground(_color(COLORS.SYNTAX_COMMENT))
         comment_format.setFontItalic(True)
         self.highlighting_rules.append((re.compile(r"#[^\n]*"), comment_format))
 
+        # TODOs - Warning color
         todo_format = QTextCharFormat()
-        todo_format.setForeground(_color("#ffb86c"))
+        todo_format.setForeground(_color(COLORS.WARNING))
         todo_format.setFontWeight(QFont.Weight.Bold)
         self.highlighting_rules.append((re.compile(r"#.*\b(TODO|FIXME|NOTE)\b.*"), todo_format))
 
         self.multi_line_string_format = QTextCharFormat()
-        self.multi_line_string_format.setForeground(_color("#f1fa8c"))
+        self.multi_line_string_format.setForeground(_color(COLORS.SYNTAX_STRING))
 
         self._current_delimiter: Optional[str] = None
 
@@ -265,19 +333,19 @@ class PythonHighlighter(QSyntaxHighlighter):
 # ------------------------ CUSTOM UI COMPONENTS ----------------------------- #
 # --------------------------------------------------------------------------- #
 class AnimatedButton(QPushButton):
-    """Gradient button with hover scaling and animated feedback."""
+    """Ultra-modern gradient button with smooth hover effects and glass morphism."""
 
     def __init__(self, text: str, gradient: Optional[tuple[str, str]] = None, parent: Optional[QWidget] = None):
         super().__init__(text, parent)
-        self.gradient = gradient or ("#667eea", "#764ba2")
+        self.gradient = gradient or (COLORS.PRIMARY, COLORS.SECONDARY)
         self._hover_progress = 0.0
         self._press_progress = 0.0
         self._gradient_shift = 0.0
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(44)
-        self.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
-        self.setStyleSheet("color: white; border: none; padding: 0 20px;")
+        self.setMinimumHeight(48)
+        self.setFont(QFont("Inter", 11, QFont.Weight.DemiBold))
+        self.setStyleSheet("color: white; border: none; padding: 0 24px;")
 
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setOffset(0, 12)
@@ -392,15 +460,18 @@ class AnimatedButton(QPushButton):
 
 
 class GlassCard(QWidget):
-    """Semi-transparent container with a soft drop shadow."""
+    """Modern glassmorphic card with backdrop blur effect."""
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: Optional[QWidget] = None, blur_enabled: bool = True):
         super().__init__(parent)
+        self.blur_enabled = blur_enabled
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+        # Modern, subtler shadow
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setOffset(0, 18)
-        shadow.setBlurRadius(40)
-        shadow.setColor(_color("#000000", 150))
+        shadow.setOffset(0, 8)
+        shadow.setBlurRadius(24)
+        shadow.setColor(_color("#000000", 100))
         self.setGraphicsEffect(shadow)
         self.setContentsMargins(0, 0, 0, 0)
 
@@ -410,28 +481,134 @@ class GlassCard(QWidget):
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             rect = self.rect().adjusted(1, 1, -1, -1)
 
+            # Modern glass gradient
             gradient = QLinearGradient(QPointF(rect.topLeft()), QPointF(rect.bottomRight()))
-            gradient.setColorAt(0.0, _color("#ffffff", 30))
-            gradient.setColorAt(1.0, _color("#667eea", 35))
+            gradient.setColorAt(0.0, _color(COLORS.BG_CARD, 200))
+            gradient.setColorAt(1.0, _color(COLORS.BG_ELEVATED, 180))
 
-            painter.setPen(QPen(_color("#ffffff", 45), 2))
+            # Border with modern accent color
+            painter.setPen(QPen(_color(COLORS.BORDER_DEFAULT), 1.5))
             painter.setBrush(gradient)
-            painter.drawRoundedRect(rect, 20, 20)
+            painter.drawRoundedRect(rect, 16, 16)
+
+            # Inner highlight for depth
+            inner_rect = rect.adjusted(1, 1, -1, -1)
+            painter.setPen(QPen(_color(COLORS.PRIMARY, 30), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(inner_rect, 15, 15)
         except Exception as e:
             logger.error(f"Error in GlassCard paintEvent: {e}")
             super().paintEvent(event)
 
 
+class ToastNotification(QWidget):
+    """Modern toast notification with slide-in animation."""
+
+    def __init__(self, message: str, toast_type: str = "info", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+        self.toast_type = toast_type
+        self.message = message
+
+        # Layout
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+
+        # Icon based on type
+        icon_map = {
+            "success": "✅",
+            "error": "❌",
+            "warning": "⚠️",
+            "info": "ℹ️"
+        }
+        icon_label = QLabel(icon_map.get(toast_type, "ℹ️"))
+        icon_label.setFont(QFont("Segoe UI Emoji", 16))
+        layout.addWidget(icon_label)
+
+        # Message
+        msg_label = QLabel(message)
+        msg_label.setStyleSheet(f"color: {COLORS.TEXT_PRIMARY}; font-size: 13px; font-weight: 500;")
+        msg_label.setWordWrap(True)
+        layout.addWidget(msg_label, 1)
+
+        self.setFixedWidth(350)
+        self.adjustSize()
+
+        # Auto-dismiss timer
+        self.dismiss_timer = QTimer(self)
+        self.dismiss_timer.timeout.connect(self.fade_out)
+        self.dismiss_timer.setSingleShot(True)
+        self.dismiss_timer.start(4000)  # 4 seconds
+
+        # Fade in animation
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
+        self.fade_in_anim = QPropertyAnimation(self.opacity_effect, b"opacity", self)
+        self.fade_in_anim.setDuration(300)
+        self.fade_in_anim.setStartValue(0.0)
+        self.fade_in_anim.setEndValue(1.0)
+        self.fade_in_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.fade_in_anim.start()
+
+    def fade_out(self):
+        """Fade out and close."""
+        fade_out_anim = QPropertyAnimation(self.opacity_effect, b"opacity", self)
+        fade_out_anim.setDuration(300)
+        fade_out_anim.setStartValue(1.0)
+        fade_out_anim.setEndValue(0.0)
+        fade_out_anim.setEasingCurve(QEasingCurve.Type.InCubic)
+        fade_out_anim.finished.connect(self.close)
+        fade_out_anim.start()
+
+    def paintEvent(self, event):  # noqa: D401 - Qt override
+        """Draw the toast background."""
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            # Color based on type
+            color_map = {
+                "success": COLORS.SUCCESS,
+                "error": COLORS.ERROR,
+                "warning": COLORS.WARNING,
+                "info": COLORS.INFO
+            }
+            bg_color = color_map.get(self.toast_type, COLORS.INFO)
+
+            rect = self.rect()
+
+            # Background with glassmorphism
+            gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            gradient.setColorAt(0.0, _color(bg_color, 220))
+            gradient.setColorAt(1.0, _color(bg_color, 200))
+
+            painter.setPen(QPen(_color(bg_color, 255), 2))
+            painter.setBrush(gradient)
+            painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 12, 12)
+
+            # Inner glow
+            painter.setPen(QPen(_color("#ffffff", 80), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(4, 4, -4, -4), 10, 10)
+        except Exception as e:
+            logger.error(f"Error in ToastNotification paintEvent: {e}")
+            super().paintEvent(event)
+
+
 class AnimatedLineEdit(QLineEdit):
-    """Line edit with animated focus glow."""
+    """Modern line edit with smooth focus glow animation."""
 
     def __init__(self, placeholder: str = "", parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._focus_progress = 0.0
         self.setPlaceholderText(placeholder)
-        self.setFont(QFont("Segoe UI", 11))
+        self.setFont(QFont("Inter", 11))
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet("color: #f0f6fc; padding: 12px 16px; background: transparent; border: none;")
+        self.setStyleSheet(f"color: {COLORS.TEXT_PRIMARY}; padding: 14px 18px; background: transparent; border: none;")
 
         self._focus_anim = QPropertyAnimation(self, b"focusProgress", self)
         self._focus_anim.setDuration(260)
@@ -457,22 +634,25 @@ class AnimatedLineEdit(QLineEdit):
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             rect = self.rect().adjusted(2, 2, -2, -2)
 
-            base_color = _color("#0d1117", 220)
+            # Modern dark background
+            base_color = _color(COLORS.BG_DEEP, 240)
             painter.setBrush(base_color)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(rect, 14, 14)
+            painter.drawRoundedRect(rect, 12, 12)
 
-            border_color = QColor("#667eea")
-            border_color.setAlphaF(0.15 + 0.45 * self._focus_progress)
+            # Animated border with new primary color
+            border_color = QColor(COLORS.PRIMARY)
+            border_color.setAlphaF(0.2 + 0.5 * self._focus_progress)
             painter.setPen(QPen(border_color, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(rect, 14, 14)
+            painter.drawRoundedRect(rect, 12, 12)
 
-            glow_color = QColor("#764ba2")
-            glow_color.setAlphaF(0.2 * self._focus_progress)
+            # Inner glow on focus
+            glow_color = QColor(COLORS.SECONDARY)
+            glow_color.setAlphaF(0.15 * self._focus_progress)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(glow_color)
-            painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 12, 12)
+            painter.drawRoundedRect(rect.adjusted(2, 2, -2, -2), 10, 10)
 
             super().paintEvent(event)
         except Exception as e:
@@ -490,48 +670,51 @@ class AnimatedLineEdit(QLineEdit):
 
 
 class ModernTabWidget(QTabWidget):
-    """Tab widget with a frosted pane and smooth indicator."""
+    """Ultra-modern tab widget with smooth gradients and hover effects."""
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setDocumentMode(True)
-        self.setStyleSheet("""
-            QTabWidget::pane {
-                border: 2px solid rgba(102, 126, 234, 0.35);
-                border-radius: 18px;
-                background: rgba(13, 17, 23, 0.65);
-                padding: 18px 18px 12px 18px;
-            }
-            QTabBar::tab {
-                background: rgba(48, 54, 61, 0.6);
-                color: #f0f6fc;
-                padding: 14px 28px;
-                margin-right: 6px;
+        self.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: 1.5px solid {COLORS.BORDER_DEFAULT};
+                border-radius: 16px;
+                background: {COLORS.BG_GLASS};
+                padding: 20px;
+            }}
+            QTabBar::tab {{
+                background: {COLORS.BG_ELEVATED};
+                color: {COLORS.TEXT_SECONDARY};
+                padding: 16px 32px;
+                margin-right: 8px;
                 border-top-left-radius: 12px;
                 border-top-right-radius: 12px;
                 font-size: 14px;
                 font-weight: 600;
-            }
-            QTabBar::tab:selected {
+                font-family: 'Inter', 'Segoe UI', sans-serif;
+                transition: all 0.3s ease;
+            }}
+            QTabBar::tab:selected {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #667eea, stop:1 #764ba2);
+                    stop:0 {COLORS.PRIMARY}, stop:1 {COLORS.SECONDARY});
                 color: white;
-            }
-            QTabBar::tab:hover {
-                background: rgba(102, 126, 234, 0.35);
-            }
+            }}
+            QTabBar::tab:hover {{
+                background: {COLORS.BORDER_HOVER};
+                color: {COLORS.TEXT_PRIMARY};
+            }}
         """)
 
 
 class AnimatedStatusLabel(QLabel):
-    """Status label featuring a pulsing indicator and smooth color changes."""
+    """Modern status label with pulsing indicator and color-coded states."""
 
     STATUS_COLORS: Dict[str, str] = {
-        "ready": "#50fa7b",
-        "running": "#50fa7b",
-        "warning": "#f1fa8c",
-        "error": "#ff5555",
-        "stopped": "#ff79c6",
+        "ready": COLORS.SUCCESS,
+        "running": COLORS.SUCCESS,
+        "warning": COLORS.WARNING,
+        "error": COLORS.ERROR,
+        "stopped": COLORS.SECONDARY,
     }
 
     def __init__(self, text: str = "", parent: Optional[QWidget] = None):
@@ -670,9 +853,9 @@ class FGDGUI(QWidget):
     def __init__(self):
         super().__init__()
         try:
-            self.setWindowTitle("MCPM v5.0 – AI Code Co‑Pilot 🚀")
-            self.resize(1680, 1020)
-            self.setMinimumSize(1280, 820)
+            self.setWindowTitle("MCPM v6.0 – Neo Cyber AI Co‑Pilot ✨")
+            self.resize(1720, 1080)
+            self.setMinimumSize(1366, 900)
             self.main_layout = QVBoxLayout()
             self.main_layout.setContentsMargins(36, 28, 36, 28)
             self.main_layout.setSpacing(24)
@@ -686,12 +869,17 @@ class FGDGUI(QWidget):
             self._memory_last_mtime: Optional[float] = None
             self._log_lock = threading.Lock()  # Thread-safe file writes
             self._log_colors = {
-                "error": QColor("#ff5555"),
-                "warning": QColor("#f1fa8c"),
-                "success": QColor("#50fa7b"),
-                "default": QColor("#f0f6fc"),
+                "error": QColor(COLORS.ERROR),
+                "warning": QColor(COLORS.WARNING),
+                "success": QColor(COLORS.SUCCESS),
+                "default": QColor(COLORS.TEXT_PRIMARY),
             }
             self._header_phase = 0.0
+            self._toast_notifications: List[ToastNotification] = []
+
+            # Settings for session persistence
+            self.settings = QSettings("MCPM", "NeoCyberGUI")
+            self._load_session()
 
             self._fade_in_intro()
 
@@ -747,43 +935,88 @@ class FGDGUI(QWidget):
 
     def _tick_header_gradient(self) -> None:
         try:
-            self._header_phase = (self._header_phase + 0.02) % 1.0
+            self._header_phase = (self._header_phase + 0.015) % 1.0
             wave = (math.sin(self._header_phase * 2 * math.pi) + 1) / 2
-            color_a = _mix_hex("#667eea", "#764ba2", wave)
-            color_b = _mix_hex("#764ba2", "#f093fb", 1 - wave * 0.6)
+            color_a = _mix_hex(COLORS.PRIMARY, COLORS.SECONDARY, wave)
+            color_b = _mix_hex(COLORS.SECONDARY, COLORS.INFO, 1 - wave * 0.5)
             animated_color = _mix_hex(color_a, color_b, 0.5)
             if hasattr(self, "header") and hasattr(self, "_header_style_template"):
                 self.header.setStyleSheet(self._header_style_template.format(color=animated_color))
         except Exception as e:
             logger.error(f"Error in header gradient animation: {e}")
 
+    def _load_session(self):
+        """Load saved session settings."""
+        try:
+            last_dir = self.settings.value("last_directory", "")
+            last_provider = self.settings.value("last_provider", "grok")
+            self._last_directory = last_dir
+            self._last_provider = last_provider
+        except Exception as e:
+            logger.warning(f"Could not load session: {e}")
+            self._last_directory = ""
+            self._last_provider = "grok"
+
+    def _save_session(self):
+        """Save session settings."""
+        try:
+            if hasattr(self, 'path_edit'):
+                self.settings.setValue("last_directory", self.path_edit.text())
+            if hasattr(self, 'provider'):
+                self.settings.setValue("last_provider", self.provider.currentText())
+        except Exception as e:
+            logger.warning(f"Could not save session: {e}")
+
+    def show_toast(self, message: str, toast_type: str = "info"):
+        """Show a toast notification."""
+        try:
+            toast = ToastNotification(message, toast_type, self)
+
+            # Position at bottom-right of window
+            x = self.width() - toast.width() - 20
+            y = self.height() - toast.height() - 20 - (len(self._toast_notifications) * (toast.height() + 10))
+
+            # Map to global coordinates
+            global_pos = self.mapToGlobal(QPoint(x, y))
+            toast.move(global_pos)
+            toast.show()
+
+            self._toast_notifications.append(toast)
+
+            # Remove from list when closed
+            toast.destroyed.connect(lambda: self._toast_notifications.remove(toast) if toast in self._toast_notifications else None)
+        except Exception as e:
+            logger.error(f"Error showing toast: {e}")
+
     def _add_header(self):
-        """Add the gradient header banner."""
-        self.header = QLabel("MCPM v5.0 – AI Code Co‑Pilot 🚀")
+        """Add the ultra-modern gradient header banner."""
+        self.header = QLabel("MCPM v6.0 – Neo Cyber AI Co‑Pilot ✨")
         self.header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.header.setMinimumHeight(82)
+        self.header.setMinimumHeight(90)
 
         header_font = self.header.font()
-        header_font.setPointSize(38)
+        header_font.setPointSize(42)
         header_font.setWeight(QFont.Weight.Black)
-        header_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.0)
+        header_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 2.5)
+        header_font.setFamily("Inter")
         self.header.setFont(header_font)
-        self.header.setContentsMargins(0, 0, 0, 12)
+        self.header.setContentsMargins(0, 0, 0, 16)
 
         self._header_style_template = """
             color: {color};
         """
-        initial_color = _mix_hex("#667eea", "#f093fb", 0.5)
+        initial_color = _mix_hex(COLORS.PRIMARY, COLORS.SECONDARY, 0.5)
         self.header.setStyleSheet(self._header_style_template.format(color=initial_color))
         self.main_layout.addWidget(self.header)
 
-        subtitle = QLabel("A modern mission control for your MCP server")
+        subtitle = QLabel("Ultra-Modern Mission Control • Real-Time Intelligence • Seamless Integration")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle_font = subtitle.font()
-        subtitle_font.setPointSize(16)
+        subtitle_font.setPointSize(15)
+        subtitle_font.setFamily("Inter")
         subtitle.setFont(subtitle_font)
-        subtitle.setContentsMargins(0, 0, 0, 16)
-        subtitle.setStyleSheet("color: rgba(240, 246, 252, 0.75);")
+        subtitle.setContentsMargins(0, 0, 0, 20)
+        subtitle.setStyleSheet(f"color: {COLORS.TEXT_SECONDARY};")
         self.main_layout.addWidget(subtitle)
 
     def _create_main_tabs(self) -> QWidget:
@@ -812,18 +1045,21 @@ class FGDGUI(QWidget):
         layout.setSpacing(20)
         card.setLayout(layout)
 
-        title = QLabel("Control Center")
-        title.setStyleSheet("font-size: 20px; font-weight: 600; color: #f0f6fc;")
+        title = QLabel("⚡ Control Center")
+        title.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {COLORS.TEXT_PRIMARY}; font-family: 'Inter';")
         layout.addWidget(title)
 
         dir_group = QVBoxLayout()
         dir_label = QLabel("📂 Project Directory")
-        dir_label.setStyleSheet("color: rgba(240, 246, 252, 0.85); font-size: 13px; font-weight: 600;")
+        dir_label.setStyleSheet(f"color: {COLORS.TEXT_SECONDARY}; font-size: 13px; font-weight: 600;")
         dir_group.addWidget(dir_label)
 
         dir_row = QHBoxLayout()
         self.path_edit = AnimatedLineEdit("Select your project workspace…")
-        browse = AnimatedButton("Browse", gradient=("#8a5cf6", "#a16ae8"))
+        # Restore last directory if available
+        if hasattr(self, '_last_directory') and self._last_directory:
+            self.path_edit.setText(self._last_directory)
+        browse = AnimatedButton("Browse", gradient=(COLORS.SECONDARY, COLORS.INFO))
         browse.clicked.connect(self.browse)
         dir_row.addWidget(self.path_edit)
         dir_row.addWidget(browse)
@@ -832,34 +1068,35 @@ class FGDGUI(QWidget):
 
         provider_group = QVBoxLayout()
         provider_label = QLabel("🤖 Default LLM Provider")
-        provider_label.setStyleSheet("color: rgba(240, 246, 252, 0.85); font-size: 13px; font-weight: 600;")
+        provider_label.setStyleSheet(f"color: {COLORS.TEXT_SECONDARY}; font-size: 13px; font-weight: 600;")
         provider_group.addWidget(provider_label)
 
         provider_row = QHBoxLayout()
         self.provider = QComboBox()
         self.provider.addItems(["grok", "openai", "claude", "ollama"])
-        self.provider.setCurrentText("grok")
-        self.provider.setStyleSheet("""
-            QComboBox {
-                background: rgba(13, 17, 23, 0.75);
-                color: #f0f6fc;
-                border: 1px solid rgba(102, 126, 234, 0.4);
+        self.provider.setCurrentText(self._last_provider if hasattr(self, '_last_provider') else "grok")
+        self.provider.setStyleSheet(f"""
+            QComboBox {{
+                background: {COLORS.BG_DEEP};
+                color: {COLORS.TEXT_PRIMARY};
+                border: 1.5px solid {COLORS.BORDER_DEFAULT};
                 border-radius: 12px;
-                padding: 12px 16px;
+                padding: 14px 18px;
                 font-size: 13px;
-            }
-            QComboBox QAbstractItemView {
-                background: #0d1117;
-                color: #f0f6fc;
-                selection-background-color: #667eea;
-                border-radius: 8px;
-            }
-            QComboBox::drop-down {
+            }}
+            QComboBox QAbstractItemView {{
+                background: {COLORS.BG_CARD};
+                color: {COLORS.TEXT_PRIMARY};
+                selection-background-color: {COLORS.PRIMARY};
+                border-radius: 10px;
+                padding: 4px;
+            }}
+            QComboBox::drop-down {{
                 border: none;
-            }
+            }}
         """)
 
-        self.start_btn = AnimatedButton("▶ Start Server", gradient=("#50fa7b", "#5fff8a"))
+        self.start_btn = AnimatedButton("▶ Start Server", gradient=(COLORS.SUCCESS, "#16c784"))
         self.start_btn.clicked.connect(self.toggle_server)
 
         provider_row.addWidget(self.provider)
@@ -871,11 +1108,12 @@ class FGDGUI(QWidget):
         layout.addWidget(self.connection_status)
 
         tips = QLabel(
-            "• Hover over cards to feel the depth\n"
-            "• Use the Memory Explorer tab to inspect stored context\n"
-            "• Logs update live – filter them in the Logs tab"
+            "💡 Pro Tips:\n"
+            "• Press Ctrl+K for quick commands\n"
+            "• Memory Explorer tracks project context\n"
+            "• Live logs update automatically"
         )
-        tips.setStyleSheet("color: rgba(240, 246, 252, 0.55); font-size: 11px; line-height: 1.5;")
+        tips.setStyleSheet(f"color: {COLORS.TEXT_MUTED}; font-size: 12px; line-height: 1.6; font-family: 'Inter';")
         layout.addWidget(tips)
         layout.addStretch()
 
@@ -888,11 +1126,11 @@ class FGDGUI(QWidget):
         bar_layout.setSpacing(18)
         bar.setLayout(bar_layout)
 
-        self.memory_usage_label = QLabel("Memory file: —")
-        self.memory_usage_label.setStyleSheet("color: rgba(240, 246, 252, 0.7); font-size: 12px;")
+        self.memory_usage_label = QLabel("💾 Memory file: —")
+        self.memory_usage_label.setStyleSheet(f"color: {COLORS.TEXT_SECONDARY}; font-size: 12px; font-family: 'Inter';")
 
-        self.log_summary_label = QLabel("Logs idle")
-        self.log_summary_label.setStyleSheet("color: rgba(240, 246, 252, 0.7); font-size: 12px;")
+        self.log_summary_label = QLabel("📊 Logs idle")
+        self.log_summary_label.setStyleSheet(f"color: {COLORS.TEXT_SECONDARY}; font-size: 12px; font-family: 'Inter';")
 
         bar_layout.addWidget(self.memory_usage_label)
         bar_layout.addStretch()
@@ -910,8 +1148,8 @@ class FGDGUI(QWidget):
 
         header = QHBoxLayout()
         label = QLabel("📁 Repository Navigator")
-        label.setStyleSheet("font-size: 18px; font-weight: 600; color: #f0f6fc;")
-        pop_out_btn = AnimatedButton("Pop Out Preview", gradient=("#667eea", "#764ba2"))
+        label.setStyleSheet(f"font-size: 18px; font-weight: 600; color: {COLORS.TEXT_PRIMARY}; font-family: 'Inter';")
+        pop_out_btn = AnimatedButton("🔍 Pop Out Preview", gradient=(COLORS.PRIMARY, COLORS.SECONDARY))
         pop_out_btn.setMinimumWidth(200)
         pop_out_btn.clicked.connect(self.pop_out_preview)
         header.addWidget(label)
@@ -921,7 +1159,7 @@ class FGDGUI(QWidget):
 
         split = QSplitter()
         split.setOrientation(Qt.Orientation.Horizontal)
-        split.setStyleSheet("QSplitter::handle { background: rgba(102, 126, 234, 0.35); width: 4px; }")
+        split.setStyleSheet(f"QSplitter::handle {{ background: {COLORS.BORDER_HOVER}; width: 3px; border-radius: 2px; }}")
 
         tree_container = QWidget()
         tree_layout = QVBoxLayout()
@@ -929,31 +1167,35 @@ class FGDGUI(QWidget):
         tree_layout.setSpacing(12)
         tree_container.setLayout(tree_layout)
 
-        tree_caption = QLabel("Structure")
-        tree_caption.setStyleSheet("color: rgba(240, 246, 252, 0.75); font-size: 13px;")
+        tree_caption = QLabel("📂 Structure")
+        tree_caption.setStyleSheet(f"color: {COLORS.TEXT_SECONDARY}; font-size: 13px; font-weight: 600;")
         tree_layout.addWidget(tree_caption)
 
         self.tree = QTreeWidget()
         self.tree.setHeaderLabel("Files")
         self.tree.itemClicked.connect(self.on_file_click)
         self.tree.setAlternatingRowColors(True)
-        self.tree.setStyleSheet("""
-            QTreeWidget {
-                background: rgba(13, 17, 23, 0.85);
-                color: #f0f6fc;
-                border: 1px solid rgba(102, 126, 234, 0.35);
-                border-radius: 14px;
+        self.tree.setStyleSheet(f"""
+            QTreeWidget {{
+                background: {COLORS.BG_CARD};
+                color: {COLORS.TEXT_PRIMARY};
+                border: 1.5px solid {COLORS.BORDER_DEFAULT};
+                border-radius: 12px;
                 font-size: 13px;
+                font-family: 'Inter';
                 padding: 12px;
-            }
-            QTreeWidget::item { padding: 6px; }
-            QTreeWidget::item:selected {
-                background: rgba(102, 126, 234, 0.35);
+            }}
+            QTreeWidget::item {{ padding: 8px; }}
+            QTreeWidget::item:selected {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {COLORS.PRIMARY}, stop:1 {COLORS.SECONDARY});
+                color: white;
                 border-radius: 8px;
-            }
-            QTreeWidget::item:hover {
-                background: rgba(102, 126, 234, 0.18);
-            }
+            }}
+            QTreeWidget::item:hover {{
+                background: {COLORS.BG_ELEVATED};
+                border-radius: 8px;
+            }}
         """)
         tree_layout.addWidget(self.tree)
 
@@ -963,23 +1205,24 @@ class FGDGUI(QWidget):
         preview_layout.setSpacing(12)
         preview_container.setLayout(preview_layout)
 
-        preview_header = QLabel("📄 Focused Preview")
-        preview_header.setStyleSheet("color: rgba(240, 246, 252, 0.85); font-size: 13px;")
+        preview_header = QLabel("📄 Code Preview")
+        preview_header.setStyleSheet(f"color: {COLORS.TEXT_SECONDARY}; font-size: 13px; font-weight: 600;")
         preview_layout.addWidget(preview_header)
 
         self.preview = QTextEdit()
         self.preview.setReadOnly(True)
         self.preview.setFont(QFont("Fira Code", 11))
-        self.preview.setStyleSheet("""
-            QTextEdit {
-                background: rgba(13, 17, 23, 0.85);
-                color: #f0f6fc;
-                border: 1px solid rgba(118, 75, 162, 0.35);
-                border-radius: 14px;
+        self.preview.setStyleSheet(f"""
+            QTextEdit {{
+                background: {COLORS.BG_DEEP};
+                color: {COLORS.TEXT_PRIMARY};
+                border: 1.5px solid {COLORS.BORDER_DEFAULT};
+                border-radius: 12px;
                 padding: 16px;
                 font-size: 11.5pt;
-                line-height: 1.55;
-            }
+                line-height: 1.6;
+                font-family: 'Fira Code', 'Consolas', monospace;
+            }}
         """)
         self.preview_highlighter = PythonHighlighter(self.preview.document())
         preview_layout.addWidget(self.preview)
@@ -1001,8 +1244,8 @@ class FGDGUI(QWidget):
 
         header = QHBoxLayout()
         diff_label = QLabel("🔍 Pending Edit Review")
-        diff_label.setStyleSheet("font-size: 18px; font-weight: 600; color: #f0f6fc;")
-        pop_out_btn = AnimatedButton("Open in Window", gradient=("#667eea", "#764ba2"))
+        diff_label.setStyleSheet(f"font-size: 18px; font-weight: 600; color: {COLORS.TEXT_PRIMARY}; font-family: 'Inter';")
+        pop_out_btn = AnimatedButton("🪟 Open in Window", gradient=(COLORS.PRIMARY, COLORS.SECONDARY))
         pop_out_btn.clicked.connect(self.pop_out_diff)
         header.addWidget(diff_label)
         header.addStretch()
@@ -1012,27 +1255,28 @@ class FGDGUI(QWidget):
         self.diff_view = QTextEdit()
         self.diff_view.setReadOnly(True)
         self.diff_view.setFont(QFont("Fira Code", 12))
-        self.diff_view.setStyleSheet("""
-            QTextEdit {
-                background: rgba(13, 17, 23, 0.88);
-                color: #f0f6fc;
-                border: 1px solid rgba(102, 126, 234, 0.4);
-                border-radius: 16px;
+        self.diff_view.setStyleSheet(f"""
+            QTextEdit {{
+                background: {COLORS.BG_CARD};
+                color: {COLORS.TEXT_PRIMARY};
+                border: 1.5px solid {COLORS.BORDER_DEFAULT};
+                border-radius: 12px;
                 padding: 20px;
                 font-size: 12pt;
-                line-height: 1.6;
-            }
+                line-height: 1.7;
+                font-family: 'Fira Code', 'Consolas', monospace;
+            }}
         """)
         layout.addWidget(self.diff_view)
 
         btns = QHBoxLayout()
         btns.setSpacing(16)
-        self.approve_btn = AnimatedButton("✅ Approve Changes", gradient=("#50fa7b", "#5fff8a"))
-        self.approve_btn.setMinimumHeight(54)
+        self.approve_btn = AnimatedButton("✅ Approve Changes", gradient=(COLORS.SUCCESS, "#16c784"))
+        self.approve_btn.setMinimumHeight(56)
         self.approve_btn.clicked.connect(self.approve_edit)
 
-        self.reject_btn = AnimatedButton("❌ Reject Changes", gradient=("#ff5555", "#ff6e6e"))
-        self.reject_btn.setMinimumHeight(54)
+        self.reject_btn = AnimatedButton("❌ Reject Changes", gradient=(COLORS.ERROR, "#f87171"))
+        self.reject_btn.setMinimumHeight(56)
         self.reject_btn.clicked.connect(self.reject_edit)
 
         btns.addWidget(self.approve_btn)
@@ -1046,11 +1290,11 @@ class FGDGUI(QWidget):
         if not hasattr(self, "approve_btn"):
             return
         if highlighted:
-            self.approve_btn.gradient = ("#5fff8a", "#8dffb8")
-            self.reject_btn.gradient = ("#ff6e6e", "#ff8989")
+            self.approve_btn.gradient = ("#16c784", "#34d399")
+            self.reject_btn.gradient = ("#f87171", "#fca5a5")
         else:
-            self.approve_btn.gradient = ("#50fa7b", "#5fff8a")
-            self.reject_btn.gradient = ("#ff5555", "#ff6e6e")
+            self.approve_btn.gradient = (COLORS.SUCCESS, "#16c784")
+            self.reject_btn.gradient = (COLORS.ERROR, "#f87171")
         self.approve_btn.update()
         self.reject_btn.update()
 
@@ -1064,8 +1308,8 @@ class FGDGUI(QWidget):
 
         header = QHBoxLayout()
         log_label = QLabel("📋 Live Server Logs")
-        log_label.setStyleSheet("font-size: 18px; font-weight: 600; color: #f0f6fc;")
-        pop_out_btn = AnimatedButton("Open in Window", gradient=("#667eea", "#764ba2"))
+        log_label.setStyleSheet(f"font-size: 18px; font-weight: 600; color: {COLORS.TEXT_PRIMARY}; font-family: 'Inter';")
+        pop_out_btn = AnimatedButton("🪟 Open in Window", gradient=(COLORS.PRIMARY, COLORS.SECONDARY))
         pop_out_btn.clicked.connect(self.pop_out_logs)
         header.addWidget(log_label)
         header.addStretch()
@@ -1074,33 +1318,35 @@ class FGDGUI(QWidget):
 
         filters = QHBoxLayout()
         filters.setSpacing(12)
-        level_label = QLabel("Level")
-        level_label.setStyleSheet("color: rgba(240, 246, 252, 0.7); font-size: 13px; font-weight: 600;")
+        level_label = QLabel("🎚️ Level")
+        level_label.setStyleSheet(f"color: {COLORS.TEXT_SECONDARY}; font-size: 13px; font-weight: 600;")
         self.level = QComboBox()
         self.level.addItems(["All", "INFO", "WARNING", "ERROR"])
-        self.level.setStyleSheet("""
-            QComboBox {
-                background: rgba(13, 17, 23, 0.78);
-                color: #f0f6fc;
-                border: 1px solid rgba(102, 126, 234, 0.35);
-                border-radius: 12px;
+        self.level.setStyleSheet(f"""
+            QComboBox {{
+                background: {COLORS.BG_DEEP};
+                color: {COLORS.TEXT_PRIMARY};
+                border: 1.5px solid {COLORS.BORDER_DEFAULT};
+                border-radius: 10px;
                 padding: 10px 14px;
-            }
-            QComboBox QAbstractItemView {
-                background: #0d1117;
-                color: #f0f6fc;
-                selection-background-color: #667eea;
+                font-size: 13px;
+            }}
+            QComboBox QAbstractItemView {{
+                background: {COLORS.BG_CARD};
+                color: {COLORS.TEXT_PRIMARY};
+                selection-background-color: {COLORS.PRIMARY};
                 border-radius: 8px;
-            }
+                padding: 2px;
+            }}
         """)
 
-        search_label = QLabel("Search")
-        search_label.setStyleSheet("color: rgba(240, 246, 252, 0.7); font-size: 13px; font-weight: 600;")
+        search_label = QLabel("🔍 Search")
+        search_label.setStyleSheet(f"color: {COLORS.TEXT_SECONDARY}; font-size: 13px; font-weight: 600;")
         self.search = AnimatedLineEdit("Search logs…")
         self.search.textChanged.connect(lambda: self.update_logs())
         self.level.currentIndexChanged.connect(lambda: self.update_logs())
 
-        clear = AnimatedButton("Clear Filters", gradient=("#8a5cf6", "#a16ae8"))
+        clear = AnimatedButton("Clear", gradient=(COLORS.SECONDARY, COLORS.INFO))
         clear.clicked.connect(self.clear_filters)
 
         filters.addWidget(level_label)
@@ -1113,16 +1359,17 @@ class FGDGUI(QWidget):
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setFont(QFont("Fira Code", 11))
-        self.log_view.setStyleSheet("""
-            QTextEdit {
-                background: rgba(13, 17, 23, 0.88);
-                color: #f0f6fc;
-                border: 1px solid rgba(102, 126, 234, 0.35);
-                border-radius: 16px;
+        self.log_view.setStyleSheet(f"""
+            QTextEdit {{
+                background: {COLORS.BG_DEEP};
+                color: {COLORS.TEXT_PRIMARY};
+                border: 1.5px solid {COLORS.BORDER_DEFAULT};
+                border-radius: 12px;
                 padding: 18px;
                 font-size: 11.5pt;
-                line-height: 1.5;
-            }
+                line-height: 1.6;
+                font-family: 'Fira Code', 'Consolas', monospace;
+            }}
         """)
         layout.addWidget(self.log_view)
 
@@ -1138,8 +1385,8 @@ class FGDGUI(QWidget):
 
         header = QHBoxLayout()
         label = QLabel("🧠 Memory Explorer")
-        label.setStyleSheet("font-size: 18px; font-weight: 600; color: #f0f6fc;")
-        refresh = AnimatedButton("Refresh", gradient=("#50fa7b", "#5fff8a"))
+        label.setStyleSheet(f"font-size: 18px; font-weight: 600; color: {COLORS.TEXT_PRIMARY}; font-family: 'Inter';")
+        refresh = AnimatedButton("🔄 Refresh", gradient=(COLORS.SUCCESS, "#16c784"))
         refresh.setMinimumWidth(160)
         refresh.clicked.connect(lambda: self.update_memory_explorer(force=True))
         header.addWidget(label)
@@ -1147,34 +1394,40 @@ class FGDGUI(QWidget):
         header.addWidget(refresh)
         layout.addLayout(header)
 
-        description = QLabel("Visualise what the MCP backend remembers about your project.")
-        description.setStyleSheet("color: rgba(240, 246, 252, 0.65); font-size: 13px;")
+        description = QLabel("Visualize what the MCP backend remembers about your project")
+        description.setStyleSheet(f"color: {COLORS.TEXT_MUTED}; font-size: 13px;")
         layout.addWidget(description)
 
         self.memory_tree = QTreeWidget()
         self.memory_tree.setColumnCount(2)
         self.memory_tree.setHeaderLabels(["Key", "Value"])
-        self.memory_tree.setStyleSheet("""
-            QTreeWidget {
-                background: rgba(13, 17, 23, 0.85);
-                color: #f0f6fc;
-                border: 1px solid rgba(102, 126, 234, 0.35);
-                border-radius: 16px;
+        self.memory_tree.setStyleSheet(f"""
+            QTreeWidget {{
+                background: {COLORS.BG_CARD};
+                color: {COLORS.TEXT_PRIMARY};
+                border: 1.5px solid {COLORS.BORDER_DEFAULT};
+                border-radius: 12px;
                 padding: 12px;
-                font-size: 12px;
-            }
-            QTreeWidget::item {
-                padding: 6px;
-            }
-            QTreeWidget::item:selected {
-                background: rgba(118, 75, 162, 0.35);
+                font-size: 13px;
+                font-family: 'Inter';
+            }}
+            QTreeWidget::item {{
+                padding: 8px;
+            }}
+            QTreeWidget::item:selected {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {COLORS.SECONDARY}, stop:1 {COLORS.PRIMARY});
+                color: white;
                 border-radius: 6px;
-            }
+            }}
+            QTreeWidget::item:hover {{
+                background: {COLORS.BG_ELEVATED};
+            }}
         """)
         layout.addWidget(self.memory_tree)
 
-        self.memory_info = QLabel("No memory file detected yet.")
-        self.memory_info.setStyleSheet("color: rgba(240, 246, 252, 0.6); font-size: 12px;")
+        self.memory_info = QLabel("No memory file detected yet")
+        self.memory_info.setStyleSheet(f"color: {COLORS.TEXT_MUTED}; font-size: 12px;")
         layout.addWidget(self.memory_info)
 
         return card
@@ -1188,29 +1441,32 @@ class FGDGUI(QWidget):
         card.setLayout(layout)
 
         backup_label = QLabel("💾 File Backups")
-        backup_label.setStyleSheet("font-size: 18px; font-weight: 600; color: #f0f6fc;")
+        backup_label.setStyleSheet(f"font-size: 18px; font-weight: 600; color: {COLORS.TEXT_PRIMARY}; font-family: 'Inter';")
         layout.addWidget(backup_label)
 
         self.backup_list = QListWidget()
-        self.backup_list.setStyleSheet("""
-            QListWidget {
-                background: rgba(13, 17, 23, 0.85);
-                color: #f0f6fc;
-                border: 1px solid rgba(102, 126, 234, 0.35);
-                border-radius: 16px;
+        self.backup_list.setStyleSheet(f"""
+            QListWidget {{
+                background: {COLORS.BG_CARD};
+                color: {COLORS.TEXT_PRIMARY};
+                border: 1.5px solid {COLORS.BORDER_DEFAULT};
+                border-radius: 12px;
                 padding: 14px;
                 font-size: 13px;
-            }
-            QListWidget::item {
-                padding: 8px;
+                font-family: 'Inter';
+            }}
+            QListWidget::item {{
+                padding: 10px;
                 border-radius: 8px;
-            }
-            QListWidget::item:selected {
-                background: rgba(102, 126, 234, 0.35);
-            }
-            QListWidget::item:hover {
-                background: rgba(102, 126, 234, 0.18);
-            }
+            }}
+            QListWidget::item:selected {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {COLORS.PRIMARY}, stop:1 {COLORS.SECONDARY});
+                color: white;
+            }}
+            QListWidget::item:hover {{
+                background: {COLORS.BG_ELEVATED};
+            }}
         """)
         layout.addWidget(self.backup_list)
 
@@ -1681,46 +1937,63 @@ class FGDGUI(QWidget):
             QMessageBox.warning(self, "Error", f"Failed to reject edit: {str(e)}")
 
     def apply_dark_mode(self):
-        self.setStyleSheet("""
-            QWidget {
+        """Apply the ultra-modern Neo Cyber dark theme."""
+        self.setStyleSheet(f"""
+            QWidget {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #0b0f2c, stop:0.4 #1c1f4a, stop:0.8 #2f1f4e, stop:1 #0b0f2c);
-                color: #f0f6fc;
-                font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
-                font-size: 12px;
-            }
-            QMessageBox {
-                background: #0d1117;
-            }
-            QScrollBar:vertical {
+                    stop:0 {COLORS.BG_DEEP}, stop:0.5 #0f0f14, stop:1 {COLORS.BG_DEEP});
+                color: {COLORS.TEXT_PRIMARY};
+                font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+                font-size: 13px;
+            }}
+            QMessageBox {{
+                background: {COLORS.BG_CARD};
+                color: {COLORS.TEXT_PRIMARY};
+            }}
+            QScrollBar:vertical {{
                 background: transparent;
-                width: 14px;
-                margin: 4px;
-            }
-            QScrollBar::handle:vertical {
+                width: 12px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #667eea, stop:1 #764ba2);
-                border-radius: 7px;
-            }
-            QScrollBar::handle:vertical:hover {
+                    stop:0 {COLORS.PRIMARY}, stop:1 {COLORS.SECONDARY});
+                border-radius: 6px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #7f89ff, stop:1 #8a5cf6);
-            }
-            QScrollBar:horizontal {
+                    stop:0 {COLORS.INFO}, stop:1 {COLORS.SECONDARY});
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar:horizontal {{
                 background: transparent;
-                height: 14px;
-                margin: 4px;
-            }
-            QScrollBar::handle:horizontal {
+                height: 12px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:horizontal {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #667eea, stop:1 #764ba2);
-                border-radius: 7px;
-            }
+                    stop:0 {COLORS.PRIMARY}, stop:1 {COLORS.SECONDARY});
+                border-radius: 6px;
+                min-width: 30px;
+            }}
+            QScrollBar::handle:horizontal:hover {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {COLORS.INFO}, stop:1 {COLORS.SECONDARY});
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
         """)
 
     def closeEvent(self, event):
         """Clean shutdown of all resources."""
         logger.info("Application closing, cleaning up...")
+
+        # Save session settings
+        self._save_session()
 
         # Stop timers
         if hasattr(self, "timer") and self.timer.isActive():
