@@ -36,6 +36,7 @@ from PyQt6.QtCore import (
     pyqtProperty,
     pyqtSignal,
     QSettings,
+    QAbstractAnimation,
 )
 from PyQt6.QtGui import (
     QColor,
@@ -65,13 +66,23 @@ import re
 import math
 from typing import Dict, List, Optional
 
+# Set up UTF-8 capable streams for emoji-friendly logging
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    # If reconfiguring the stream fails, continue with the default encoding
+    pass
+
 # Set up logging to file AND console
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('mcpm_gui.log'),
-        logging.StreamHandler()
+        logging.FileHandler('mcpm_gui.log', encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
@@ -761,10 +772,10 @@ class AnimatedStatusLabel(QLabel):
         self._indicator_color = color
         self.setText(message)
         if status in {"running", "warning"}:
-            if self._pulse_anim.state() != QPropertyAnimation.Running:
+            if self._pulse_anim.state() != QAbstractAnimation.State.Running:
                 self._pulse_anim.start()
         else:
-            if self._pulse_anim.state() == QPropertyAnimation.Running:
+            if self._pulse_anim.state() == QAbstractAnimation.State.Running:
                 self._pulse_anim.stop()
                 self._pulse_anim.start()
                 self._pulse_anim.stop()
