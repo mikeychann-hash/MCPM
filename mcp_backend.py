@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
+from pydantic import ValidationError
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -759,7 +760,55 @@ class FGDMCPServer:
 
         try:
             async with stdio_server() as (read, write):
-                await self.server.run(read, write, self.server.create_initialization_options())
+                # The MCP library handles JSON-RPC validation errors internally
+                # and logs them. It should continue running after errors.
+                # If the server exits unexpectedly, the error will be caught here.
+                try:
+                    await self.server.run(read, write, self.server.create_initialization_options())
+                except ValidationError as e:
+                    # Handle Pydantic validation errors from malformed JSON-RPC messages
+                    # This catches errors that escape the MCP library's internal handling
+                    logger.error("=" * 80)
+                    logger.error("JSON-RPC VALIDATION ERROR")
+                    logger.error("=" * 80)
+                    logger.error(f"Error: {e}")
+                    logger.error("The MCP server received invalid input that doesn't conform to JSON-RPC format.")
+                    logger.error("This usually happens when:")
+                    logger.error("  1. A client sends malformed JSON")
+                    logger.error("  2. Non-JSON data is sent to stdin")
+                    logger.error("  3. The JSON structure doesn't match JSON-RPC 2.0 spec")
+                    logger.error("")
+                    logger.error("The MCP server expects messages in this format:")
+                    logger.error('  {"jsonrpc": "2.0", "method": "...", "params": {...}, "id": 1}')
+                    logger.error("=" * 80)
+                except json.JSONDecodeError as e:
+                    # Handle JSON parsing errors that escape the MCP library
+                    logger.error("=" * 80)
+                    logger.error("JSON DECODE ERROR")
+                    logger.error("=" * 80)
+                    logger.error(f"Error: {e}")
+                    logger.error("Failed to parse JSON from stdin.")
+                    logger.error("Ensure all input is valid JSON format.")
+                    logger.error("=" * 80)
+                except Exception as e:
+                    # Catch any other unexpected errors
+                    logger.error("=" * 80)
+                    logger.error("UNEXPECTED MCP SERVER ERROR")
+                    logger.error("=" * 80)
+                    logger.error(f"Error: {e}")
+                    logger.error("Stack trace:", exc_info=True)
+                    logger.error("=" * 80)
+                    raise
+        except KeyboardInterrupt:
+            logger.info("MCP Server interrupted by user (Ctrl+C)")
+        except Exception as e:
+            logger.error("=" * 80)
+            logger.error("FATAL ERROR - MCP SERVER SHUTDOWN")
+            logger.error("=" * 80)
+            logger.error(f"Error: {e}")
+            logger.error("Stack trace:", exc_info=True)
+            logger.error("=" * 80)
+            raise
         finally:
             # Clean shutdown of approval monitor
             if self._approval_task and not self._approval_task.done():

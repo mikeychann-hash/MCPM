@@ -560,6 +560,34 @@ If deploying in production:
 - Verify disk space available
 - Look for errors in logs during save operations
 
+### JSON-RPC validation errors
+If you see errors like `"Invalid JSON: expected value at line 1 column 1"` or `"validation error for JSONRPCMessage"`:
+
+**Cause**: The MCP server communicates via stdio using JSON-RPC 2.0 protocol and expects properly formatted JSON messages on stdin.
+
+**Common scenarios:**
+1. **Testing/Debugging**: Typing plain text into the terminal running the MCP server
+2. **Misconfigured Client**: A client sending non-JSON data
+3. **Protocol Mismatch**: Client not using JSON-RPC 2.0 format
+
+**Expected Input Format:**
+```json
+{"jsonrpc": "2.0", "method": "tools/call", "params": {"name": "read_file", "arguments": {"filepath": "test.py"}}, "id": 1}
+```
+
+**Invalid Input Examples:**
+- Plain text: `"hello"` or `"ass"`
+- Malformed JSON: `{invalid json}`
+- Non-JSON-RPC format: `{"command": "read_file"}`
+
+**How to Fix:**
+- Use the PyQt6 GUI (`gui_main_pro.py`) instead of running the server directly
+- Use the FastAPI REST wrapper (`server.py`) for HTTP-based interaction
+- If using stdio directly, ensure all input is valid JSON-RPC 2.0 format
+- Don't type directly into a terminal running the MCP server
+
+**Note**: The server handles these errors gracefully and will continue running. The error is logged for debugging purposes.
+
 ---
 
 ## Contributing
