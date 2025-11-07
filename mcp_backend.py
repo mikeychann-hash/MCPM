@@ -456,6 +456,69 @@ class FGDMCPServer:
 
         return None
 
+    def _get_mcp_status_context(self) -> str:
+        """Generate MCP server status and capabilities info for LLM context"""
+        status_info = {
+            "mcp_server": {
+                "status": "connected",
+                "name": "fgd-mcp-server",
+                "version": "5.0",
+                "watch_directory": str(self.watch_dir),
+                "available_tools": [
+                    {
+                        "name": "list_directory",
+                        "description": "List files in a directory (gitignore aware)",
+                        "usage": "Use this to explore the project structure"
+                    },
+                    {
+                        "name": "read_file",
+                        "description": "Read file contents with metadata",
+                        "usage": "Use this to read and analyze files"
+                    },
+                    {
+                        "name": "write_file",
+                        "description": "Write/create files with automatic backups",
+                        "usage": "Use this to create or overwrite files"
+                    },
+                    {
+                        "name": "edit_file",
+                        "description": "Edit files with diff preview and approval workflow",
+                        "usage": "Use this to make precise edits to existing files"
+                    },
+                    {
+                        "name": "git_diff",
+                        "description": "Show git diff for changes",
+                        "usage": "Use this to review uncommitted changes"
+                    },
+                    {
+                        "name": "git_commit",
+                        "description": "Commit changes to git",
+                        "usage": "Use this to save changes to version control"
+                    },
+                    {
+                        "name": "git_log",
+                        "description": "Show git commit history",
+                        "usage": "Use this to view recent commits"
+                    },
+                    {
+                        "name": "llm_query",
+                        "description": "Ask questions to Grok (this tool you're using now)",
+                        "usage": "Recursive - you're currently using this tool"
+                    }
+                ],
+                "capabilities": [
+                    "File system operations (read, write, edit)",
+                    "Git integration (diff, commit, log)",
+                    "Automatic backups before modifications",
+                    "Gitignore-aware file filtering",
+                    "Context-aware memory system",
+                    "File watching and change detection"
+                ],
+                "reference_projects": [str(p) for p in self.ref_dirs] if self.ref_dirs else []
+            }
+        }
+        return f"\n\n=== MCP SERVER STATUS ===\n{json.dumps(status_info, indent=2)}\n=== END MCP STATUS ===\n"
+
     # ------------------------------------------------------------------- #
     # --------------------------- TOOLS --------------------------------- #
     # ------------------------------------------------------------------- #
@@ -725,7 +788,19 @@ class FGDMCPServer:
             # ---------- LLM QUERY ----------
             elif name == "llm_query":
                 prompt = arguments["prompt"]
-                context = json.dumps(self.memory.get_context()[-5:])
+
+                # Build comprehensive context for the LLM
+                context_parts = []
+
+                # Add MCP server status and capabilities
+                context_parts.append(self._get_mcp_status_context())
+
+                # Add recent memory context
+                recent_context = self.memory.get_context()[-5:]
+                if recent_context:
+                    context_parts.append(f"\n=== RECENT ACTIVITY ===\n{json.dumps(recent_context, indent=2)}\n=== END RECENT ACTIVITY ===\n")
+
+                context = "".join(context_parts)
                 response = await self.llm.query(prompt, "grok", context=context)
 
                 # Save conversation as prompt + response pairs
