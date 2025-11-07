@@ -21,7 +21,6 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
-    QShortcut,
     QDialog,
     QCheckBox,
 )
@@ -50,7 +49,6 @@ from PyQt6.QtGui import (
     QTextCursor,
     QSyntaxHighlighter,
     QKeySequence,
-    QAction,
 )
 from pathlib import Path
 import sys
