@@ -1876,8 +1876,17 @@ class FGDGUI(QWidget):
                     QMessageBox.warning(self, "Error", "No project directory selected")
                     return
 
+                project_dir = Path(dir_path).expanduser()
+                if not project_dir.exists():
+                    QMessageBox.warning(self, "Error", f"Directory does not exist: {project_dir}")
+                    return
+
+                if not project_dir.is_dir():
+                    QMessageBox.warning(self, "Error", f"Path is not a directory: {project_dir}")
+                    return
+
                 # Write approval decision
-                approval_file = Path(dir_path) / ".fgd_approval.json"
+                approval_file = project_dir / ".fgd_approval.json"
                 approval_data = {
                     "approved": True,
                     "filepath": self.pending_edit['filepath'],
@@ -1885,12 +1894,19 @@ class FGDGUI(QWidget):
                     "new_text": self.pending_edit['new_text'],
                     "timestamp": datetime.now().isoformat()
                 }
-                approval_file.write_text(json.dumps(approval_data, indent=2))
+                try:
+                    approval_file.write_text(json.dumps(approval_data, indent=2))
+                except OSError as exc:
+                    QMessageBox.warning(self, "Error", f"Failed to write approval file: {exc}")
+                    return
 
                 # Delete pending edit file to signal completion
-                pending_file = Path(dir_path) / ".fgd_pending_edit.json"
+                pending_file = project_dir / ".fgd_pending_edit.json"
                 if pending_file.exists():
-                    pending_file.unlink()
+                    try:
+                        pending_file.unlink()
+                    except OSError as exc:
+                        logger.warning(f"Failed to remove pending edit file: {exc}")
 
                 logger.info(f"✅ Edit APPROVED for: {self.pending_edit.get('filepath')}")
                 QMessageBox.information(self, "✅ Edit Approved",
