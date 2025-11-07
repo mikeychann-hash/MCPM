@@ -684,6 +684,7 @@ class FGDGUI(QWidget):
             self.pop_out_windows = []
             self.memory_file_path: Optional[Path] = None
             self._memory_last_mtime: Optional[float] = None
+            self._log_lock = threading.Lock()  # Thread-safe file writes
             self._log_colors = {
                 "error": QColor("#ff5555"),
                 "warning": QColor("#f1fa8c"),
@@ -1289,42 +1290,73 @@ class FGDGUI(QWidget):
     def _read_subprocess_stdout(self):
         """Background thread to read subprocess stdout and write to log file."""
         try:
-            for line in self.process.stdout:
+            # Use readline() instead of iteration to avoid blocking indefinitely
+            while self.process and self.process.poll() is None:
                 try:
+                    line = self.process.stdout.readline()
+                    if not line:
+                        break
                     decoded = line.decode('utf-8', errors='replace')
                     if self.log_file:
-                        with open(self.log_file, 'a') as f:
-                            f.write(decoded)
-                            f.flush()
+                        with self._log_lock:  # Thread-safe file writes
+                            with open(self.log_file, 'a') as f:
+                                f.write(decoded)
+                                f.flush()
                 except Exception as e:
                     logger.error(f"Error writing stdout to log: {e}")
+                    break
         except Exception as e:
             logger.debug(f"Stdout reader stopped: {e}")
 
     def _read_subprocess_stderr(self):
         """Background thread to read subprocess stderr and write to log file."""
         try:
-            for line in self.process.stderr:
+            # Use readline() instead of iteration to avoid blocking indefinitely
+            while self.process and self.process.poll() is None:
                 try:
+                    line = self.process.stderr.readline()
+                    if not line:
+                        break
                     decoded = line.decode('utf-8', errors='replace')
                     if self.log_file:
-                        with open(self.log_file, 'a') as f:
-                            f.write(decoded)
-                            f.flush()
+                        with self._log_lock:  # Thread-safe file writes
+                            with open(self.log_file, 'a') as f:
+                                f.write(decoded)
+                                f.flush()
                 except Exception as e:
                     logger.error(f"Error writing stderr to log: {e}")
+                    break
         except Exception as e:
             logger.debug(f"Stderr reader stopped: {e}")
 
     def toggle_server(self):
         if self.process and self.process.poll() is None:
-            self.process.terminate()
+            logger.info("Stopping MCP backend process...")
+
+            # Store reference before cleanup to avoid race with daemon threads
+            process_to_stop = self.process
+            process_to_stop.terminate()
+
+            try:
+                # Wait up to 5 seconds for clean shutdown
+                process_to_stop.wait(timeout=5)
+                logger.info("Process terminated cleanly")
+            except subprocess.TimeoutExpired:
+                logger.warning("Process didn't stop in 5s, forcing kill...")
+                process_to_stop.kill()
+                try:
+                    process_to_stop.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    logger.error("Process refused to die after kill!")
+
+            # Now safe to set to None (daemon threads will exit on pipe close)
+            self.process = None
+
             self.connection_status.set_status("stopped", "🔴 Server stopped")
             self.start_btn.setText("▶ Start Server")
             self._highlight_decision_buttons(False)
             if hasattr(self, "log_summary_label"):
                 self.log_summary_label.setText("Server stopped")
-            self.process = None
         else:
             self.start_server()
 
@@ -1687,19 +1719,42 @@ class FGDGUI(QWidget):
         """)
 
     def closeEvent(self, event):
+        """Clean shutdown of all resources."""
+        logger.info("Application closing, cleaning up...")
+
+        # Stop timers
         if hasattr(self, "timer") and self.timer.isActive():
             self.timer.stop()
         if hasattr(self, "_header_timer") and self._header_timer.isActive():
             self._header_timer.stop()
+
+        # Stop subprocess with proper cleanup
         if self.process:
+            logger.info("Terminating MCP backend...")
             self.process.terminate()
+
             try:
-                self.process.wait(timeout=2)
-            except Exception:
-                pass
+                self.process.wait(timeout=5)
+                logger.info("Backend stopped cleanly")
+            except subprocess.TimeoutExpired:
+                logger.warning("Backend didn't stop in 5s, forcing kill...")
+                self.process.kill()
+                try:
+                    self.process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    logger.error("Backend refused to die!")
+            except Exception as e:
+                logger.error(f"Error stopping backend: {e}")
+
+        # Close pop-out windows
         for window in self.pop_out_windows:
-            window.close()
+            try:
+                window.close()
+            except Exception as e:
+                logger.debug(f"Error closing pop-out window: {e}")
+
         event.accept()
+        logger.info("Application closed")
 
     def _log_color_for_line(self, line: str) -> QColor:
         """Return the cached color brush for a given log line."""
