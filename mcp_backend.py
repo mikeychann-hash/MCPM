@@ -234,6 +234,7 @@ class FGDMCPServer:
         self.llm = LLMBackend(self.config)
         self.recent_changes = []
         self.observer = None
+        self._approval_task = None  # Track approval monitor task
         self._start_watcher()
         self._start_approval_monitor()
 
@@ -292,8 +293,8 @@ class FGDMCPServer:
 
     async def _approval_monitor_loop(self):
         """Background loop to check for approval files and auto-apply edits."""
-        while True:
-            try:
+        try:
+            while True:
                 await asyncio.sleep(2)  # Check every 2 seconds
 
                 approval_file = self.watch_dir / ".fgd_approval.json"
@@ -351,8 +352,11 @@ class FGDMCPServer:
                 # Clean up approval file
                 approval_file.unlink()
 
-            except Exception as e:
-                logger.debug(f"Approval monitor error: {e}")
+        except asyncio.CancelledError:
+            logger.info("Approval monitor cancelled, shutting down cleanly")
+            raise  # Re-raise to allow proper cancellation
+        except Exception as e:
+            logger.error(f"Approval monitor error: {e}", exc_info=True)
 
     def _on_file_change(self, event_type, path):
         try:
@@ -749,17 +753,38 @@ class FGDMCPServer:
     async def run(self):
         logger.info("MCP Server starting...")
 
-        # Start approval monitor in the event loop context
-        asyncio.create_task(self._approval_monitor_loop())
+        # Start approval monitor and store task reference for clean shutdown
+        self._approval_task = asyncio.create_task(self._approval_monitor_loop())
         logger.info("✅ Approval monitor started")
 
-        async with stdio_server() as (read, write):
-            await self.server.run(read, write, self.server.create_initialization_options())
+        try:
+            async with stdio_server() as (read, write):
+                await self.server.run(read, write, self.server.create_initialization_options())
+        finally:
+            # Clean shutdown of approval monitor
+            if self._approval_task and not self._approval_task.done():
+                logger.info("Cancelling approval monitor...")
+                self._approval_task.cancel()
+                try:
+                    await self._approval_task
+                except asyncio.CancelledError:
+                    pass
+                logger.info("Approval monitor cancelled")
 
     def stop(self):
         if self.observer:
+            logger.info("Stopping file watcher...")
             self.observer.stop()
-            self.observer.join()
+
+            # Join with timeout to prevent hanging
+            self.observer.join(timeout=5.0)
+
+            if self.observer.is_alive():
+                logger.warning("File watcher thread did not stop cleanly")
+            else:
+                logger.info("File watcher stopped cleanly")
+
+            self.observer = None
 
 # --------------------------------------------------------------------------- #
 # ------------------------------- ENTRYPOINT ------------------------------- #
