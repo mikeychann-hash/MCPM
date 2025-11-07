@@ -239,6 +239,19 @@ The memory system enables:
 - pip package manager
 - Virtual environment (recommended)
 
+### System Dependencies (Linux)
+
+The PyQt6 GUI requires the following system libraries on Linux:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install -y libegl1 libegl-mesa0 libgl1 libxkbcommon0 libdbus-1-3 \
+    libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+    libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-cursor0 libxcb-xfixes0
+```
+
+**Note**: These are automatically installed on most desktop Linux systems, but may be missing in minimal/server installations.
+
 ### Steps
 
 1. **Clone or download the repository**
