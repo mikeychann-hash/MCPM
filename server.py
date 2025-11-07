@@ -463,11 +463,22 @@ async def llm_query(request: Request, query_req: LLMQueryRequest):
         prompt = query_req.prompt
         provider = query_req.provider
         memory_store = RUN["server"].memory
-        context_entries = memory_store.get_context()[-5:]
-        context_blob = json.dumps(context_entries) if context_entries else ""
 
         if not prompt:
             raise HTTPException(status_code=400, detail="No prompt provided")
+
+        # Build comprehensive context for the LLM
+        context_parts = []
+
+        # Add MCP server status and capabilities
+        context_parts.append(RUN["server"]._get_mcp_status_context())
+
+        # Add recent memory context
+        context_entries = memory_store.get_context()[-5:]
+        if context_entries:
+            context_parts.append(f"\n=== RECENT ACTIVITY ===\n{json.dumps(context_entries, indent=2)}\n=== END RECENT ACTIVITY ===\n")
+
+        context_blob = "".join(context_parts)
 
         # Query the LLM
         response = await RUN["server"].llm.query(prompt, provider, context=context_blob)
