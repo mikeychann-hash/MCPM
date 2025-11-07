@@ -7,7 +7,7 @@ Tests dependencies and provides helpful error messages
 import sys
 import importlib
 
-def test_import(module_name, pip_name=None):
+def _check_import(module_name, pip_name=None):
     """Test if a module can be imported"""
     pip_name = pip_name or module_name
     try:
@@ -50,7 +50,7 @@ def main():
     ]
 
     for module, pip_name in required:
-        if not test_import(module, pip_name):
+        if not _check_import(module, pip_name):
             all_ok = False
 
     print()

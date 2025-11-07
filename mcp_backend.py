@@ -219,10 +219,9 @@ class FGDMCPServer:
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
 
-        # Validate paths before using them
-        self._validate_paths()
-
-        self.watch_dir = Path(self.config['watch_dir']).resolve()
+        # Validate and prepare watch directory before using it
+        watch_dir_path = self._validate_paths()
+        self.watch_dir = self._prepare_watch_dir(watch_dir_path)
         self.scan = self.config.get('scan', {})
         self.max_dir_size = self.scan.get('max_dir_size_gb', 2) * 1_073_741_824
         self.max_files = self.scan.get('max_files_per_scan', 5)
@@ -233,6 +232,13 @@ class FGDMCPServer:
 
         self.memory = MemoryStore(self.watch_dir / ".fgd_memory.json", self.config)
         self.llm = LLMBackend(self.config)
+
+        # Verify provider requirements early so the server fails fast if misconfigured
+        default_provider = self.config.get('llm', {}).get('default_provider')
+        if default_provider == 'grok' and not os.getenv("XAI_API_KEY"):
+            raise ValueError(
+                "XAI_API_KEY environment variable is required when using the Grok provider"
+            )
         self.recent_changes = []
         self.observer = None
         self._approval_task = None  # Track approval monitor task
@@ -242,12 +248,11 @@ class FGDMCPServer:
         self.server = Server("fgd-mcp-server")
         self._setup_handlers()
 
-    def _validate_paths(self):
-        """Validate paths and warn about OS mismatches"""
+    def _validate_paths(self) -> Path:
+        """Validate the configured watch directory and return its resolved path."""
         watch_dir_str = str(self.config.get('watch_dir', '')).strip()
         if not watch_dir_str:
-            logger.warning("watch_dir is not configured; filesystem tools will be disabled")
-            return
+            raise ValueError("watch_dir is not configured; filesystem tools cannot start")
 
         current_os = platform.system()
         windows_drive = PureWindowsPath(watch_dir_str).drive
@@ -259,21 +264,50 @@ class FGDMCPServer:
             logger.error(f"Running on: {current_os}")
             logger.error(f"Config has Windows path: {watch_dir_str}")
             logger.error("This will cause ALL write operations to fail silently!")
-            logger.error("Files will be written to unexpected locations or not at all.")
             logger.error("Update fgd_config.yaml with the correct path for your OS.")
             logger.error("=" * 80)
+            raise ValueError(
+                "watch_dir is configured with a Windows-specific path but the current "
+                f"platform is {current_os}. Update fgd_config.yaml with an OS-appropriate path."
+            )
 
         try:
-            path = Path(watch_dir_str).expanduser().resolve()
-        except (OSError, RuntimeError) as exc:
-            logger.error(f"Failed to validate watch_dir '{watch_dir_str}': {exc}")
-            return
+            path = Path(watch_dir_str).expanduser()
+        except (TypeError, OSError, RuntimeError) as exc:
+            raise ValueError(f"Failed to interpret watch_dir '{watch_dir_str}': {exc}") from exc
 
+        try:
+            resolved = path.resolve(strict=False)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"Failed to resolve watch_dir '{watch_dir_str}': {exc}") from exc
+
+        if resolved.exists() and not resolved.is_dir():
+            raise ValueError(
+                f"watch_dir '{resolved}' exists but is not a directory; update fgd_config.yaml"
+            )
+
+        return resolved
+
+    def _prepare_watch_dir(self, path: Path) -> Path:
+        """Ensure the watch directory exists, is a directory, and is accessible."""
         if not path.exists():
-            logger.warning("=" * 80)
-            logger.warning(f"⚠️  WARNING: watch_dir does not exist: {path}")
-            logger.warning("Write operations will fail until this directory is created.")
-            logger.warning("=" * 80)
+            try:
+                logger.warning(
+                    f"watch_dir '{path}' does not exist. Creating directory before startup."
+                )
+                path.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                raise ValueError(f"Failed to create watch_dir '{path}': {exc}") from exc
+
+        if not path.is_dir():
+            raise ValueError(f"watch_dir '{path}' is not a directory; update fgd_config.yaml")
+
+        if not os.access(path, os.R_OK | os.W_OK):
+            raise ValueError(
+                f"watch_dir '{path}' must be readable and writable by the MCP server"
+            )
+
+        return path
 
     # ------------------------------------------------------------------- #
     # -------------------------- WATCHER -------------------------------- #
@@ -827,7 +861,12 @@ class FGDMCPServer:
                 raise ValueError(f"Unknown tool: {name}")
 
     async def run(self):
-        logger.info("MCP Server starting...")
+        logger.info("=" * 60)
+        logger.info("MCP Server starting with configuration:")
+        logger.info(f"  Watch dir: {self.watch_dir}")
+        logger.info(f"  LLM Provider: {self.llm.default}")
+        logger.info(f"  Grok API Key present: {bool(os.getenv('XAI_API_KEY'))}")
+        logger.info("=" * 60)
 
         # Start approval monitor and store task reference for clean shutdown
         self._approval_task = asyncio.create_task(self._approval_monitor_loop())
