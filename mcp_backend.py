@@ -26,6 +26,19 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import traceback
 from dotenv import load_dotenv
+import time
+
+# Cross-platform file locking
+try:
+    import fcntl  # Unix/Linux/Mac
+    HAS_FCNTL = True
+except ImportError:
+    HAS_FCNTL = False
+    try:
+        import msvcrt  # Windows
+        HAS_MSVCRT = True
+    except ImportError:
+        HAS_MSVCRT = False
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -54,6 +67,66 @@ class FileChangeHandler(FileSystemEventHandler):
         if not event.is_directory:
             self.callback('deleted', event.src_path)
 
+class FileLock:
+    """Cross-platform file locking context manager."""
+
+    def __init__(self, file_path, timeout=10):
+        self.file_path = Path(file_path)
+        self.lock_file = self.file_path.with_suffix('.lock')
+        self.timeout = timeout
+        self.lock_fd = None
+
+    def __enter__(self):
+        """Acquire lock with timeout."""
+        start_time = time.time()
+
+        while True:
+            try:
+                # Create lock file
+                self.lock_fd = open(self.lock_file, 'w')
+
+                if HAS_FCNTL:
+                    # Unix/Linux/Mac: Use fcntl
+                    fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                elif HAS_MSVCRT:
+                    # Windows: Use msvcrt
+                    msvcrt.locking(self.lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    # No locking available - log warning
+                    logger.warning("File locking not available on this platform")
+
+                return self
+
+            except (IOError, OSError) as e:
+                # Lock is held by another process
+                if self.lock_fd:
+                    self.lock_fd.close()
+                    self.lock_fd = None
+
+                if time.time() - start_time >= self.timeout:
+                    raise TimeoutError(f"Could not acquire lock on {self.lock_file} after {self.timeout}s")
+
+                # Wait a bit before retrying
+                time.sleep(0.1)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Release lock."""
+        if self.lock_fd:
+            try:
+                if HAS_FCNTL:
+                    fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_UN)
+                elif HAS_MSVCRT:
+                    msvcrt.locking(self.lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+            except:
+                pass
+            finally:
+                self.lock_fd.close()
+                # Clean up lock file
+                try:
+                    self.lock_file.unlink()
+                except:
+                    pass
+
 class MemoryStore:
     def __init__(self, memory_file: Path, config: Dict):
         self.memory_file = memory_file
@@ -65,13 +138,18 @@ class MemoryStore:
     def _load(self):
         if self.memory_file.exists():
             try:
-                data = json.loads(self.memory_file.read_text())
-                # Handle both old format (just memories) and new format (memories + context)
-                if isinstance(data, dict) and 'memories' in data:
-                    return data
-                else:
-                    # Old format - just memories dict
-                    return {'memories': data, 'context': []}
+                # Use file locking to prevent reading during writes
+                with FileLock(self.memory_file, timeout=5):
+                    data = json.loads(self.memory_file.read_text())
+                    # Handle both old format (just memories) and new format (memories + context)
+                    if isinstance(data, dict) and 'memories' in data:
+                        return data
+                    else:
+                        # Old format - just memories dict
+                        return {'memories': data, 'context': []}
+            except TimeoutError as e:
+                logger.warning(f"Memory load timeout (file locked): {e}")
+                return {'memories': {}, 'context': []}
             except Exception as e:
                 logger.error(f"Memory load error: {e}")
                 return {'memories': {}, 'context': []}
@@ -85,13 +163,30 @@ class MemoryStore:
                 "memories": self.memories,
                 "context": self.context
             }
-            self.memory_file.write_text(json.dumps(full_data, indent=2))
+
+            # Use file locking to prevent concurrent writes
+            with FileLock(self.memory_file, timeout=10):
+                # Atomic write: write to temp file, then rename
+                temp_file = self.memory_file.with_suffix('.tmp')
+                temp_file.write_text(json.dumps(full_data, indent=2))
+
+                # Set restrictive permissions (600 = owner read/write only)
+                try:
+                    os.chmod(temp_file, 0o600)
+                except Exception as perm_error:
+                    logger.warning(f"Could not set file permissions: {perm_error}")
+
+                # Atomic rename (POSIX guarantees atomicity)
+                temp_file.replace(self.memory_file)
+
             # Verify write succeeded
             if self.memory_file.exists():
                 size = self.memory_file.stat().st_size
                 logger.debug(f"✅ Memory saved: {self.memory_file.resolve()} ({size} bytes)")
         except Exception as e:
             logger.error(f"❌ Memory save error to {self.memory_file.resolve()}: {e}")
+            # CRITICAL FIX: Re-raise exception to prevent silent data loss
+            raise
 
     def remember(self, key, value, category="general"):
         if category not in self.memories:

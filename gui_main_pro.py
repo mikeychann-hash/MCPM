@@ -815,44 +815,55 @@ class PopOutWindow(QWidget):
 
         layout.addWidget(self.text_edit)
 
-        # Close button
-        close_btn = QPushButton("Close")
+        # Close button - use modern NeoCyberColors
+        close_btn = QPushButton("✕ Close")
         close_btn.clicked.connect(self.close)
-        close_btn.setStyleSheet("""
-            QPushButton {
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #667eea, stop:1 #764ba2);
-                color: white;
+                    stop:0 {COLORS.ERROR}, stop:1 #dc2626);
+                color: {COLORS.TEXT_PRIMARY};
                 border: none;
                 border-radius: 8px;
                 padding: 12px 24px;
                 font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
+                font-weight: 600;
+                font-family: 'Inter', sans-serif;
+            }}
+            QPushButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #7c8ff0, stop:1 #8a5cb8);
-            }
+                    stop:0 #f87171, stop:1 {COLORS.ERROR});
+                transform: translateY(-1px);
+            }}
         """)
         layout.addWidget(close_btn)
 
         self.apply_dark_mode()
 
     def apply_dark_mode(self):
-        self.setStyleSheet("""
-            QWidget {
+        """Apply modern Neo Cyber color scheme to match main GUI."""
+        self.setStyleSheet(f"""
+            QWidget {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #0f0c29, stop:0.5 #302b63, stop:1 #24243e);
-                color: #f0f6fc;
-            }
-            QTextEdit {
-                background: #0d1117;
-                color: #f0f6fc;
-                border: 2px solid #30363d;
-                border-radius: 8px;
-                padding: 12px;
+                    stop:0 {COLORS.BG_DEEP},
+                    stop:0.5 #0f0f14,
+                    stop:1 {COLORS.BG_DEEP});
+                color: {COLORS.TEXT_PRIMARY};
+                font-family: 'Inter', sans-serif;
+            }}
+            QTextEdit {{
+                background: {COLORS.BG_CARD};
+                color: {COLORS.TEXT_PRIMARY};
+                border: 1.5px solid {COLORS.BORDER_DEFAULT};
+                border-radius: 12px;
+                padding: 16px;
+                font-family: 'Fira Code', 'Consolas', monospace;
                 font-size: 11pt;
-            }
+                line-height: 1.6;
+            }}
+            QTextEdit:focus {{
+                border: 1.5px solid {COLORS.PRIMARY};
+            }}
         """)
 
 # --------------------------------------------------------------------------- #
@@ -895,6 +906,7 @@ class FGDGUI(QWidget):
             self._build_ui()
             self.timer = QTimer()
             self.timer.timeout.connect(self.update_logs)
+            self.timer.timeout.connect(self.check_backend_health)  # HEALTH MONITORING
             self.timer.start(1000)
 
             self._start_header_animation()
@@ -1705,27 +1717,68 @@ class FGDGUI(QWidget):
         if not self.log_file or not self.log_file.exists():
             return
         try:
-            lines = self.log_file.read_text().splitlines()
+            # Initialize tracking variables on first run
+            if not hasattr(self, '_log_last_pos'):
+                self._log_last_pos = 0
+                self._log_last_level = "All"
+                self._log_last_search = ""
+
             level = self.level.currentText()
             search = self.search.text().lower()
-            filtered = []
-            for line in lines:
-                if level != "All" and level not in line:
-                    continue
-                if search and search not in line.lower():
-                    continue
-                filtered.append(line)
 
-            self.log_view.clear()
-            for line in filtered:
-                cursor = self.log_view.textCursor()
-                cursor.movePosition(QTextCursor.MoveOperation.End)
-                self.log_view.setTextCursor(cursor)
-                self.log_view.setTextColor(self._log_color_for_line(line))
-                self.log_view.insertPlainText(line + "\n")
+            # Check if filters changed - if so, we need to rebuild
+            filters_changed = (level != self._log_last_level or search != self._log_last_search)
+
+            if filters_changed:
+                # Filters changed - do a full rebuild
+                self._log_last_level = level
+                self._log_last_search = search
+                self._log_last_pos = 0
+                self.log_view.clear()
+
+                # Read entire file and apply filters
+                lines = self.log_file.read_text().splitlines()
+                for line in lines:
+                    if level != "All" and level not in line:
+                        continue
+                    if search and search not in line.lower():
+                        continue
+
+                    cursor = self.log_view.textCursor()
+                    cursor.movePosition(QTextCursor.MoveOperation.End)
+                    self.log_view.setTextCursor(cursor)
+                    self.log_view.setTextColor(self._log_color_for_line(line))
+                    self.log_view.insertPlainText(line + "\n")
+
+                self._log_last_pos = self.log_file.stat().st_size
+            else:
+                # Filters unchanged - only read new lines (PERFORMANCE FIX)
+                file_size = self.log_file.stat().st_size
+
+                # Only process if file has grown
+                if file_size > self._log_last_pos:
+                    with open(self.log_file, 'r') as f:
+                        f.seek(self._log_last_pos)
+                        new_lines = f.readlines()
+                        self._log_last_pos = f.tell()
+
+                    # Append only new filtered lines
+                    for line in new_lines:
+                        line = line.rstrip('\n')
+                        if level != "All" and level not in line:
+                            continue
+                        if search and search not in line.lower():
+                            continue
+
+                        cursor = self.log_view.textCursor()
+                        cursor.movePosition(QTextCursor.MoveOperation.End)
+                        self.log_view.setTextCursor(cursor)
+                        self.log_view.setTextColor(self._log_color_for_line(line))
+                        self.log_view.insertPlainText(line + "\n")
 
             if hasattr(self, "log_summary_label"):
-                self.log_summary_label.setText(f"Showing {len(filtered)} log lines")
+                total_lines = self.log_view.document().lineCount()
+                self.log_summary_label.setText(f"Showing {total_lines} log lines")
 
             self._update_memory_usage()
             self.update_memory_explorer()
@@ -1734,6 +1787,38 @@ class FGDGUI(QWidget):
             self.check_pending_edits()
         except Exception as e:
             logger.debug(f"Error updating logs: {e}")
+
+    def check_backend_health(self):
+        """Monitor backend process health and detect crashes (P0 FIX: GUI-18)."""
+        if not self.process:
+            return
+
+        try:
+            # Check if process is still running
+            poll_result = self.process.poll()
+
+            if poll_result is not None:
+                # Process has terminated!
+                logger.error(f"Backend process crashed with exit code: {poll_result}")
+
+                # Update UI to reflect crashed state
+                if hasattr(self, 'connection_status'):
+                    self.connection_status.set_status("error", f"🔴 Crashed (exit code {poll_result})")
+
+                if hasattr(self, 'start_btn'):
+                    self.start_btn.setText("▶ Start Server")
+
+                # Show toast notification
+                self.show_toast(
+                    f"Backend process crashed (exit code {poll_result}). Check logs for details.",
+                    "error"
+                )
+
+                # Clean up
+                self.process = None
+
+        except Exception as e:
+            logger.debug(f"Error checking backend health: {e}")
 
     def update_memory_explorer(self, force: bool = False) -> None:
         if not hasattr(self, "memory_tree"):
