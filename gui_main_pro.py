@@ -450,6 +450,25 @@ class AnimatedButton(QPushButton):
             logger.error(f"Error in AnimatedButton paintEvent: {e}")
             super().paintEvent(event)
 
+    def hideEvent(self, event):
+        """Stop animation timer when hidden (P1 FIX: GUI-3 - prevent timer leak)."""
+        if hasattr(self, '_gradient_timer') and self._gradient_timer:
+            self._gradient_timer.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        """Resume animation timer when shown (P1 FIX: GUI-3)."""
+        if hasattr(self, '_gradient_timer') and self._gradient_timer:
+            self._gradient_timer.start(60)
+        super().showEvent(event)
+
+    def closeEvent(self, event):
+        """Clean up timer on close (P1 FIX: GUI-3)."""
+        if hasattr(self, '_gradient_timer') and self._gradient_timer:
+            self._gradient_timer.stop()
+            self._gradient_timer.deleteLater()
+        super().closeEvent(event)
+
     def get_hover_progress(self) -> float:
         return self._hover_progress
 
@@ -989,25 +1008,37 @@ class FGDGUI(QWidget):
             logger.warning(f"Could not save session: {e}")
 
     def show_toast(self, message: str, toast_type: str = "info"):
-        """Show a toast notification."""
+        """Show a toast notification (P1 FIX: GUI-2 - proper repositioning)."""
         try:
             toast = ToastNotification(message, toast_type, self)
-
-            # Position at bottom-right of window
-            x = self.width() - toast.width() - 20
-            y = self.height() - toast.height() - 20 - (len(self._toast_notifications) * (toast.height() + 10))
-
-            # Map to global coordinates
-            global_pos = self.mapToGlobal(QPoint(x, y))
-            toast.move(global_pos)
+            self._toast_notifications.append(toast)
+            self._reposition_toasts()  # Reposition all toasts
             toast.show()
 
-            self._toast_notifications.append(toast)
+            # Auto-remove after 4 seconds and reposition remaining
+            def remove_toast():
+                if toast in self._toast_notifications:
+                    self._toast_notifications.remove(toast)
+                    toast.close()
+                    self._reposition_toasts()  # Reposition remaining toasts
 
-            # Remove from list when closed
-            toast.destroyed.connect(lambda: self._toast_notifications.remove(toast) if toast in self._toast_notifications else None)
+            QTimer.singleShot(4000, remove_toast)
         except Exception as e:
             logger.error(f"Error showing toast: {e}")
+
+    def _reposition_toasts(self):
+        """Reposition all visible toasts (P1 FIX: GUI-2)."""
+        try:
+            y_offset = self.height() - 20
+            for toast in reversed(self._toast_notifications):
+                if toast and not toast.isHidden():
+                    y_offset -= toast.height()
+                    x = self.width() - toast.width() - 20
+                    global_pos = self.mapToGlobal(QPoint(x, y_offset))
+                    toast.move(global_pos)
+                    y_offset -= 10  # Gap between toasts
+        except Exception as e:
+            logger.debug(f"Error repositioning toasts: {e}")
 
     def _add_header(self):
         """Add the ultra-modern gradient header banner."""
@@ -2105,11 +2136,13 @@ class FGDGUI(QWidget):
         # Save session settings
         self._save_session()
 
-        # Stop timers
-        if hasattr(self, "timer") and self.timer.isActive():
+        # Stop timers (P1 FIX: GUI-4 - proper cleanup)
+        if hasattr(self, "timer") and self.timer:
             self.timer.stop()
-        if hasattr(self, "_header_timer") and self._header_timer.isActive():
+            self.timer.deleteLater()
+        if hasattr(self, "_header_timer") and self._header_timer:
             self._header_timer.stop()
+            self._header_timer.deleteLater()
 
         # Stop subprocess with proper cleanup
         if self.process:

@@ -27,6 +27,7 @@ from watchdog.events import FileSystemEventHandler
 import traceback
 from dotenv import load_dotenv
 import time
+import uuid
 
 # Cross-platform file locking
 try:
@@ -930,23 +931,28 @@ class FGDMCPServer:
                     context_parts.append(f"\n=== RECENT ACTIVITY ===\n{json.dumps(recent_context, indent=2)}\n=== END RECENT ACTIVITY ===\n")
 
                 context = "".join(context_parts)
-                response = await self.llm.query(prompt, "grok", context=context)
+                # P1 FIX (MCP-1): Use configured default provider instead of hardcoded "grok"
+                provider = self.llm.default
+                response = await self.llm.query(prompt, provider, context=context)
 
                 # Save conversation as prompt + response pairs
                 timestamp = datetime.now().isoformat()
+                # P1 FIX (MEMORY-4): Use UUID for chat keys to prevent collisions
+                chat_id = str(uuid.uuid4())
                 conversation_entry = {
+                    "id": chat_id,
                     "prompt": prompt,
                     "response": response,
-                    "provider": "grok",
+                    "provider": provider,  # Use actual provider
                     "timestamp": timestamp,
                     "context_used": len(self.memory.get_context())
                 }
 
-                # Store in conversations category for threading
-                self.memory.remember(f"chat_{timestamp}", conversation_entry, "conversations")
+                # Store in conversations category for threading (using UUID instead of timestamp)
+                self.memory.remember(f"chat_{chat_id}", conversation_entry, "conversations")
 
                 # Also keep in llm category for backward compatibility
-                self.memory.remember(f"grok_{timestamp}", response, "llm")
+                self.memory.remember(f"{provider}_{timestamp}", response, "llm")
 
                 logger.info(f"Chat saved: prompt={prompt[:50]}..., response={response[:50]}...")
                 return [TextContent(type="text", text=response)]
