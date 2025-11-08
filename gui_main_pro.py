@@ -627,6 +627,95 @@ class ToastNotification(QWidget):
             super().paintEvent(event)
 
 
+class LoadingOverlay(QWidget):
+    """Modern loading spinner overlay (P1 FIX: GUI-11)."""
+
+    def __init__(self, message: str = "Loading...", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.message = message
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+
+        # Spinning animation
+        self._rotation = 0.0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._advance_rotation)
+        self._timer.start(16)  # ~60fps
+
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(20)
+
+        # Spinner label
+        self.spinner_label = QLabel("⏳")
+        self.spinner_label.setFont(QFont("Segoe UI Emoji", 48))
+        self.spinner_label.setStyleSheet(f"color: {COLORS.PRIMARY}; background: transparent;")
+        self.spinner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.spinner_label)
+
+        # Message label
+        self.text_label = QLabel(message)
+        self.text_label.setFont(QFont("Inter", 14, QFont.Weight.DemiBold))
+        self.text_label.setStyleSheet(f"color: {COLORS.TEXT_PRIMARY}; background: transparent;")
+        self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.text_label)
+
+        self.setLayout(layout)
+
+    def _advance_rotation(self):
+        """Animate the spinner rotation."""
+        self._rotation = (self._rotation + 6) % 360
+        self.update()
+
+    def show_loading(self):
+        """Show the loading overlay covering the parent."""
+        if self.parent():
+            self.setGeometry(self.parent().rect())
+        self.show()
+        self.raise_()
+        QApplication.processEvents()  # Update UI immediately
+
+    def set_message(self, message: str):
+        """Update the loading message."""
+        self.message = message
+        self.text_label.setText(message)
+        QApplication.processEvents()
+
+    def closeEvent(self, event):
+        """Clean up timer on close."""
+        if hasattr(self, '_timer') and self._timer:
+            self._timer.stop()
+            self._timer.deleteLater()
+        super().closeEvent(event)
+
+    def paintEvent(self, event):
+        """Draw the loading overlay background."""
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            # Semi-transparent dark background
+            painter.fillRect(self.rect(), _color("#000000", 180))
+
+            # Draw rotating spinner
+            painter.save()
+            center = self.spinner_label.rect().center()
+            global_center = self.spinner_label.mapTo(self, center)
+            painter.translate(global_center)
+            painter.rotate(self._rotation)
+
+            # Draw spinning arc
+            pen = QPen(QColor(COLORS.PRIMARY), 4)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawArc(-20, -20, 40, 40, 0, 240 * 16)  # 240 degree arc
+
+            painter.restore()
+        except Exception as e:
+            logger.debug(f"Error in LoadingOverlay paintEvent: {e}")
+
+
 class AnimatedLineEdit(QLineEdit):
     """Modern line edit with smooth focus glow animation."""
 
@@ -1226,6 +1315,7 @@ class FGDGUI(QWidget):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabel("Files")
         self.tree.itemClicked.connect(self.on_file_click)
+        self.tree.itemExpanded.connect(self.on_tree_item_expanded)  # P1 FIX: GUI-16 lazy loading
         self.tree.setAlternatingRowColors(True)
         self.tree.setStyleSheet(f"""
             QTreeWidget {{
@@ -1565,32 +1655,72 @@ class FGDGUI(QWidget):
         self._add_tree_items(root_item, Path(root))
         root_item.setExpanded(True)
 
-    def _add_tree_items(self, parent, path):
+    def _add_tree_items(self, parent, path, lazy=True):
+        """Add tree items with optional lazy loading (P1 FIX: GUI-16)."""
         try:
             for p in sorted(path.iterdir(), key=lambda x: (not x.is_dir(), x.name)):
-                if p.name.startswith('.') or p.name in ['node_modules', '__pycache__']:
+                if p.name.startswith('.') or p.name in ['node_modules', '__pycache__', '.git', '__MACOSX']:
                     continue
                 item = QTreeWidgetItem([p.name])
                 item.setData(0, Qt.ItemDataRole.UserRole, str(p))
                 parent.addChild(item)
+
                 if p.is_dir():
-                    self._add_tree_items(item, p)
+                    if lazy:
+                        # Add placeholder for lazy loading
+                        placeholder = QTreeWidgetItem(["..."])
+                        item.addChild(placeholder)
+                        # Store path for lazy loading
+                        item.setData(0, Qt.ItemDataRole.UserRole + 1, str(p))
+                    else:
+                        # Load immediately (non-lazy)
+                        self._add_tree_items(item, p, lazy=True)
         except Exception as e:
             logger.warning(f"Error adding tree items for {path}: {e}")
 
+    def on_tree_item_expanded(self, item):
+        """Load children when item expanded - lazy loading (P1 FIX: GUI-16)."""
+        try:
+            # Check if this item has placeholder children
+            if item.childCount() == 1 and item.child(0).text(0) == "...":
+                # Remove placeholder
+                item.removeChild(item.child(0))
+
+                # Load actual children
+                path_str = item.data(0, Qt.ItemDataRole.UserRole + 1)
+                if path_str:
+                    path = Path(path_str)
+                    if path.exists() and path.is_dir():
+                        self._add_tree_items(item, path, lazy=True)
+        except Exception as e:
+            logger.warning(f"Error expanding tree item: {e}")
+
     def on_file_click(self, item, column):
+        """Handle file click with loading indicator (P1 FIX: GUI-11)."""
         try:
             file_path = item.data(0, Qt.ItemDataRole.UserRole)
             if file_path and Path(file_path).is_file():
                 path = Path(file_path)
-                if path.stat().st_size > 500_000:
-                    self.preview.setPlainText(f"File too large to preview: {path.stat().st_size / 1024:.1f} KB")
+                file_size = path.stat().st_size
+
+                if file_size > 500_000:
+                    self.preview.setPlainText(f"File too large to preview: {file_size / 1024:.1f} KB")
                     return
+
+                # Show loading indicator for files > 100KB
+                loader = None
+                if file_size > 100_000:
+                    loader = LoadingOverlay(f"Loading {path.name}...", self)
+                    loader.show_loading()
+
                 try:
                     content = path.read_text(encoding='utf-8')
                     self.preview.setPlainText(content)
                 except UnicodeDecodeError:
                     self.preview.setPlainText("[Binary file - cannot preview]")
+                finally:
+                    if loader:
+                        loader.close()
         except Exception as e:
             logger.error(f"Error previewing file: {e}")
             self.preview.setPlainText(f"Error: {str(e)}")
@@ -1669,80 +1799,89 @@ class FGDGUI(QWidget):
             self.start_server()
 
     def start_server(self):
+        """Start the backend server with loading indicator (P1 FIX: GUI-11)."""
         dir_path = self.path_edit.text().strip()
         if not dir_path or not Path(dir_path).exists():
             self.connection_status.set_status("error", "🔴 Invalid project directory")
             return
 
-        provider = self.provider.currentText()
-        self.memory_file_path = Path(dir_path) / ".fgd_memory.json"
-        self._memory_last_mtime = None
-        self._update_memory_usage()
-
-        config = {
-            "watch_dir": dir_path,
-            "memory_file": str(self.memory_file_path),
-            "context_limit": 20,
-            "scan": {"max_dir_size_gb": 2, "max_files_per_scan": 5, "max_file_size_kb": 250},
-            "reference_dirs": [],
-            "llm": {
-                "default_provider": provider,
-                "providers": {
-                    "grok": {"model": "grok-beta", "base_url": "https://api.x.ai/v1"},
-                    "openai": {"model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1"},
-                    "claude": {"model": "claude-3-5-sonnet-20241022", "base_url": "https://api.anthropic.com/v1"},
-                    "ollama": {"model": "llama3", "base_url": "http://localhost:11434/v1"}
-                }
-            }
-        }
-        config_path = Path(dir_path) / "fgd_config.yaml"
-        config_path.write_text(yaml.dump(config))
-
-        self.log_file = Path(dir_path) / "fgd_server.log"
-        self.log_file.write_text("")
-
-        env = os.environ.copy()
-
-        # Use absolute path to mcp_backend.py (in MCPM directory, not user's project)
-        mcpm_root = Path(__file__).parent.resolve()
-        backend_script = mcpm_root / "mcp_backend.py"
-
-        if not backend_script.exists():
-            logger.error(f"Backend script not found: {backend_script}")
-            self.connection_status.set_status("error", "🚨 Backend script missing")
-            QMessageBox.critical(self, "Missing Backend", f"Could not find mcp_backend.py at:\n{backend_script}")
-            return
-
-        logger.info(f"Starting backend: {backend_script}")
-        logger.info(f"Config path: {config_path}")
-        logger.info(f"Working directory: {mcpm_root}")
+        # Show loading indicator while starting server
+        loader = LoadingOverlay("Starting backend server...", self)
+        loader.show_loading()
 
         try:
-            self.process = subprocess.Popen(
-                [sys.executable, str(backend_script), str(config_path)],
-                cwd=str(mcpm_root),  # Run from MCPM directory, not user's project
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-        except Exception as exc:
-            logger.error(f"Failed to launch backend: {exc}")
-            self.connection_status.set_status("error", "🚨 Failed to launch backend")
-            QMessageBox.critical(self, "Launch Error", f"Could not start backend:\n{exc}")
-            return
+            provider = self.provider.currentText()
+            self.memory_file_path = Path(dir_path) / ".fgd_memory.json"
+            self._memory_last_mtime = None
+            self._update_memory_usage()
 
-        # Start background threads to read subprocess output
-        stdout_thread = threading.Thread(target=self._read_subprocess_stdout, daemon=True)
-        stderr_thread = threading.Thread(target=self._read_subprocess_stderr, daemon=True)
-        stdout_thread.start()
-        stderr_thread.start()
-        logger.info("Subprocess output monitoring threads started")
+            config = {
+                "watch_dir": dir_path,
+                "memory_file": str(self.memory_file_path),
+                "context_limit": 20,
+                "scan": {"max_dir_size_gb": 2, "max_files_per_scan": 5, "max_file_size_kb": 250},
+                "reference_dirs": [],
+                "llm": {
+                    "default_provider": provider,
+                    "providers": {
+                        "grok": {"model": "grok-beta", "base_url": "https://api.x.ai/v1"},
+                        "openai": {"model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1"},
+                        "claude": {"model": "claude-3-5-sonnet-20241022", "base_url": "https://api.anthropic.com/v1"},
+                        "ollama": {"model": "llama3", "base_url": "http://localhost:11434/v1"}
+                    }
+                }
+            }
+            config_path = Path(dir_path) / "fgd_config.yaml"
+            config_path.write_text(yaml.dump(config))
 
-        self.connection_status.set_status("running", f"🟢 Running on {provider}")
-        self.start_btn.setText("⏹ Stop Server")
-        self.log_summary_label.setText("Awaiting log data…")
-        self.update_memory_explorer(force=True)
+            self.log_file = Path(dir_path) / "fgd_server.log"
+            self.log_file.write_text("")
+
+            env = os.environ.copy()
+
+            # Use absolute path to mcp_backend.py (in MCPM directory, not user's project)
+            mcpm_root = Path(__file__).parent.resolve()
+            backend_script = mcpm_root / "mcp_backend.py"
+
+            if not backend_script.exists():
+                logger.error(f"Backend script not found: {backend_script}")
+                self.connection_status.set_status("error", "🚨 Backend script missing")
+                QMessageBox.critical(self, "Missing Backend", f"Could not find mcp_backend.py at:\n{backend_script}")
+                return
+
+            logger.info(f"Starting backend: {backend_script}")
+            logger.info(f"Config path: {config_path}")
+            logger.info(f"Working directory: {mcpm_root}")
+
+            try:
+                self.process = subprocess.Popen(
+                    [sys.executable, str(backend_script), str(config_path)],
+                    cwd=str(mcpm_root),  # Run from MCPM directory, not user's project
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+            except Exception as exc:
+                logger.error(f"Failed to launch backend: {exc}")
+                self.connection_status.set_status("error", "🚨 Failed to launch backend")
+                QMessageBox.critical(self, "Launch Error", f"Could not start backend:\n{exc}")
+                return
+
+            # Start background threads to read subprocess output
+            stdout_thread = threading.Thread(target=self._read_subprocess_stdout, daemon=True)
+            stderr_thread = threading.Thread(target=self._read_subprocess_stderr, daemon=True)
+            stdout_thread.start()
+            stderr_thread.start()
+            logger.info("Subprocess output monitoring threads started")
+
+            self.connection_status.set_status("running", f"🟢 Running on {provider}")
+            self.start_btn.setText("⏹ Stop Server")
+            self.log_summary_label.setText("Awaiting log data…")
+            self.update_memory_explorer(force=True)
+        finally:
+            # Close loading indicator
+            loader.close()
 
     def update_logs(self):
         if not self.log_file or not self.log_file.exists():
