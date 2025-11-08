@@ -6,6 +6,87 @@
 
 ## 🚨 CRITICAL BUGS (High Priority)
 
+### ⚠️ MEMORY SYSTEM CRITICAL ISSUES
+
+#### MEMORY-1. **Context Persistence Bug WAS FIXED** ✅
+**Severity:** CRITICAL (NOW RESOLVED)
+**Location:** mcp_backend.py MemoryStore (Line 119)
+**Issue:** In old version, `add_context()` did NOT call `_save()`, so all context was lost on server restart.
+**Status:** FIXED - Line 119 now includes `self._save()  # FIX: Persist context to disk immediately`
+**Impact:** Chat history and file operation context now persists across restarts.
+
+#### MEMORY-2. **Silent Write Failures** ⚠️
+**Severity:** CRITICAL
+**Location:** mcp_backend.py `MemoryStore._save()` (Lines 80-94)
+**Issue:** Exceptions during save are caught and logged but NOT re-raised. If the directory doesn't exist or is read-only, writes silently fail.
+**Impact:** Users think data is saved but it's not. COMPLETE DATA LOSS.
+**Test Result:** Confirmed - write to `/nonexistent/path/.fgd_memory.json` logs error but doesn't raise exception.
+**Fix Required:** Re-raise exception after logging, or return boolean success/failure.
+
+```python
+# Current code:
+except Exception as e:
+    logger.error(f"❌ Memory save error: {e}")
+    # SILENTLY CONTINUES - DATA LOST!
+```
+
+#### MEMORY-3. **Race Condition in Memory Store** ⚠️
+**Severity:** CRITICAL
+**Location:** mcp_backend.py `MemoryStore` (entire class)
+**Issue:** No file locking mechanism. Multiple MemoryStore instances (API server + MCP backend) can overwrite each other's changes.
+**Impact:** DATA CORRUPTION - one process's writes overwrite another's.
+**Test Result:** Confirmed - Store2 completely overwrote Store1's data.
+**Fix Required:** Implement file locking (fcntl/msvcrt) or use database.
+
+#### MEMORY-4. **Timestamp Collision in Chat Keys** ⚠️
+**Severity:** HIGH
+**Location:** mcp_backend.py `llm_query` tool (Line 851)
+**Issue:** Chat conversations keyed by timestamp: `f"chat_{timestamp}"`. In rapid succession, timestamps can collide.
+**Impact:** Second chat with same timestamp OVERWRITES first chat. Data loss.
+**Test Result:** 16 duplicate timestamps in 100 rapid calls (16% collision rate!)
+**Fix Required:** Use UUID or monotonic counter instead of timestamp.
+
+```python
+# Current code:
+self.memory.remember(f"chat_{timestamp}", conversation_entry, "conversations")
+# If two chats in same microsecond, second overwrites first!
+```
+
+#### MEMORY-5. **Unbounded Memory Growth** ⚠️
+**Severity:** HIGH
+**Location:** mcp_backend.py `MemoryStore` (Lines 96-104)
+**Issue:** Context is limited to 20 entries, but `memories` dict has NO SIZE LIMIT. Long-running servers accumulate unlimited data.
+**Impact:** Memory file grows to 10MB+ (tested with 10,000 entries = 10.39 MB). Slow loads, high memory usage.
+**Test Result:** Confirmed - no pruning mechanism exists.
+**Fix Required:** Implement memory pruning strategy (LRU, time-based, size-based).
+
+#### MEMORY-6. **World-Readable Memory Files** 🔒
+**Severity:** MEDIUM (Security)
+**Location:** mcp_backend.py `MemoryStore._save()` (Line 88)
+**Issue:** Memory files created with default permissions (644 = world-readable). Contains sensitive data like API responses, file contents, chat history.
+**Impact:** INFORMATION DISCLOSURE - any user on system can read.
+**Test Result:** Confirmed - file permissions are `-rw-r--r--`.
+**Fix Required:** Set restrictive permissions (600) on memory files.
+
+#### MEMORY-7. **No Atomic Writes** ⚠️
+**Severity:** MEDIUM
+**Location:** mcp_backend.py `MemoryStore._save()` (Line 88)
+**Issue:** Uses `write_text()` which is not atomic. If process crashes mid-write, file is corrupted.
+**Impact:** Corrupted memory file, data loss.
+**Fix Required:** Write to temp file, then atomic rename.
+
+```python
+# Current non-atomic:
+self.memory_file.write_text(json.dumps(full_data, indent=2))
+
+# Should be:
+temp = self.memory_file.with_suffix('.tmp')
+temp.write_text(json.dumps(full_data, indent=2))
+temp.replace(self.memory_file)  # Atomic on POSIX
+```
+
+---
+
 ### gui_main_pro.py
 
 #### 1. **Race Condition in Subprocess Output Reading** (Lines 1555-1595)
@@ -441,6 +522,147 @@ elif command == "commit" or "commit" in user.lower():
 - **State Management:** Global `RUN` dict in server.py is anti-pattern
 - **Resource Cleanup:** Inconsistent cleanup on failures
 - **Configuration:** Hardcoded values should be in config files
+
+---
+
+## 💾 MEMORY SYSTEM DEEP DIVE
+
+### ✅ What Works:
+1. **Chat conversations ARE saved** - Every LLM query is persisted to `.fgd_memory.json`
+2. **Context IS persisted** - Fixed in recent update (line 119 in mcp_backend.py)
+3. **Old format migration** - Handles old format without context gracefully
+4. **Dual storage** - Saves to both `conversations` and `llm` categories for compatibility
+
+### ❌ Critical Issues Discovered:
+
+#### Issue Summary:
+After extensive testing, I found **7 critical memory bugs**:
+
+1. **Silent Write Failures** (CRITICAL)
+   - Errors logged but not raised
+   - Users think data is saved when it's not
+   - Complete data loss scenario
+
+2. **Race Condition** (CRITICAL)
+   - Multiple MemoryStore instances overwrite each other
+   - API server + MCP backend can corrupt data
+   - Test confirmed: 100% data loss when concurrent
+
+3. **Timestamp Collisions** (HIGH)
+   - Chat keys use timestamp: `chat_{timestamp}`
+   - 16% collision rate in rapid succession
+   - Overwrites previous chats
+
+4. **Unbounded Growth** (HIGH)
+   - No size limit on memories dict
+   - Can grow to 10MB+ (tested)
+   - Only context is limited (20 entries)
+
+5. **World-Readable Files** (SECURITY)
+   - Default 644 permissions
+   - Sensitive data exposed to all users
+   - Chat history, API responses readable
+
+6. **No Atomic Writes** (MEDIUM)
+   - Crash during write = corrupted file
+   - No temp file + rename pattern
+
+7. **No File Locking** (MEDIUM)
+   - Concurrent access not coordinated
+   - Related to race condition issue
+
+### Test Results:
+
+```bash
+# Silent failure test
+✅ Confirmed: Write to /nonexistent/path fails silently
+
+# Race condition test
+✅ Confirmed: Store2 completely overwrote Store1's data
+
+# Unbounded growth test
+✅ Confirmed: 10,000 entries = 10.39 MB with no limit
+
+# Timestamp collision test
+✅ Confirmed: 16 duplicates in 100 rapid calls (16%)
+
+# Permission test
+✅ Confirmed: Files created with 644 (world-readable)
+```
+
+### Does Memory Actually Save?
+
+**Short Answer: YES... but with serious bugs**
+
+The memory system DOES save to disk:
+- ✅ Every `remember()` call saves immediately
+- ✅ Every `add_context()` call saves immediately (fixed recently)
+- ✅ Every `recall()` that increments access_count saves
+- ✅ Chat conversations are saved to `conversations` category
+- ✅ File operations saved to context array
+
+**However:**
+- ❌ Silent failures mean you won't know if save failed
+- ❌ Race conditions can corrupt or lose data
+- ❌ Timestamp collisions cause chat overwrites
+- ❌ No size limit means unbounded growth
+- ❌ World-readable permissions expose sensitive data
+
+### Memory File Structure:
+
+```json
+{
+  "memories": {
+    "conversations": {
+      "chat_2025-11-08T12:34:56.789": {
+        "value": {
+          "prompt": "User question",
+          "response": "LLM response",
+          "provider": "grok",
+          "timestamp": "2025-11-08T12:34:56.789",
+          "context_used": 5
+        },
+        "timestamp": "2025-11-08T12:34:56.789",
+        "access_count": 0
+      }
+    },
+    "llm": {
+      "grok_2025-11-08T12:34:56.789": {
+        "value": "LLM response text",
+        "timestamp": "2025-11-08T12:34:56.789",
+        "access_count": 0
+      }
+    },
+    "commits": { /* git commits */ },
+    "git_diffs": { /* git diffs */ }
+  },
+  "context": [
+    {
+      "type": "file_read",
+      "data": {"path": "example.py", "meta": {...}},
+      "timestamp": "2025-11-08T12:34:56.789"
+    },
+    // Limited to last 20 entries (config: context_limit)
+  ]
+}
+```
+
+### Recommendations:
+
+**Immediate (P0):**
+1. Fix silent write failures - re-raise exceptions
+2. Implement file locking to prevent race conditions
+3. Use UUID instead of timestamp for chat keys
+
+**Short-term (P1):**
+4. Implement memory size limits and pruning
+5. Set restrictive permissions (600) on memory files
+6. Add atomic write pattern (temp + rename)
+
+**Long-term (P2):**
+7. Consider SQLite instead of JSON for better concurrency
+8. Add memory compaction/archiving
+9. Implement versioning for memory file format
 
 ---
 
