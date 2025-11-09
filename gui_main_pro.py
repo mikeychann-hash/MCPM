@@ -450,6 +450,25 @@ class AnimatedButton(QPushButton):
             logger.error(f"Error in AnimatedButton paintEvent: {e}")
             super().paintEvent(event)
 
+    def hideEvent(self, event):
+        """Stop animation timer when hidden (P1 FIX: GUI-3 - prevent timer leak)."""
+        if hasattr(self, '_gradient_timer') and self._gradient_timer:
+            self._gradient_timer.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        """Resume animation timer when shown (P1 FIX: GUI-3)."""
+        if hasattr(self, '_gradient_timer') and self._gradient_timer:
+            self._gradient_timer.start(60)
+        super().showEvent(event)
+
+    def closeEvent(self, event):
+        """Clean up timer on close (P1 FIX: GUI-3)."""
+        if hasattr(self, '_gradient_timer') and self._gradient_timer:
+            self._gradient_timer.stop()
+            self._gradient_timer.deleteLater()
+        super().closeEvent(event)
+
     def get_hover_progress(self) -> float:
         return self._hover_progress
 
@@ -606,6 +625,95 @@ class ToastNotification(QWidget):
         except Exception as e:
             logger.error(f"Error in ToastNotification paintEvent: {e}")
             super().paintEvent(event)
+
+
+class LoadingOverlay(QWidget):
+    """Modern loading spinner overlay (P1 FIX: GUI-11)."""
+
+    def __init__(self, message: str = "Loading...", parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.message = message
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+
+        # Spinning animation
+        self._rotation = 0.0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._advance_rotation)
+        self._timer.start(16)  # ~60fps
+
+        layout = QVBoxLayout(self)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setSpacing(20)
+
+        # Spinner label
+        self.spinner_label = QLabel("⏳")
+        self.spinner_label.setFont(QFont("Segoe UI Emoji", 48))
+        self.spinner_label.setStyleSheet(f"color: {COLORS.PRIMARY}; background: transparent;")
+        self.spinner_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.spinner_label)
+
+        # Message label
+        self.text_label = QLabel(message)
+        self.text_label.setFont(QFont("Inter", 14, QFont.Weight.DemiBold))
+        self.text_label.setStyleSheet(f"color: {COLORS.TEXT_PRIMARY}; background: transparent;")
+        self.text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.text_label)
+
+        self.setLayout(layout)
+
+    def _advance_rotation(self):
+        """Animate the spinner rotation."""
+        self._rotation = (self._rotation + 6) % 360
+        self.update()
+
+    def show_loading(self):
+        """Show the loading overlay covering the parent."""
+        if self.parent():
+            self.setGeometry(self.parent().rect())
+        self.show()
+        self.raise_()
+        QApplication.processEvents()  # Update UI immediately
+
+    def set_message(self, message: str):
+        """Update the loading message."""
+        self.message = message
+        self.text_label.setText(message)
+        QApplication.processEvents()
+
+    def closeEvent(self, event):
+        """Clean up timer on close."""
+        if hasattr(self, '_timer') and self._timer:
+            self._timer.stop()
+            self._timer.deleteLater()
+        super().closeEvent(event)
+
+    def paintEvent(self, event):
+        """Draw the loading overlay background."""
+        try:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            # Semi-transparent dark background
+            painter.fillRect(self.rect(), _color("#000000", 180))
+
+            # Draw rotating spinner
+            painter.save()
+            center = self.spinner_label.rect().center()
+            global_center = self.spinner_label.mapTo(self, center)
+            painter.translate(global_center)
+            painter.rotate(self._rotation)
+
+            # Draw spinning arc
+            pen = QPen(QColor(COLORS.PRIMARY), 4)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawArc(-20, -20, 40, 40, 0, 240 * 16)  # 240 degree arc
+
+            painter.restore()
+        except Exception as e:
+            logger.debug(f"Error in LoadingOverlay paintEvent: {e}")
 
 
 class AnimatedLineEdit(QLineEdit):
@@ -815,44 +923,55 @@ class PopOutWindow(QWidget):
 
         layout.addWidget(self.text_edit)
 
-        # Close button
-        close_btn = QPushButton("Close")
+        # Close button - use modern NeoCyberColors
+        close_btn = QPushButton("✕ Close")
         close_btn.clicked.connect(self.close)
-        close_btn.setStyleSheet("""
-            QPushButton {
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #667eea, stop:1 #764ba2);
-                color: white;
+                    stop:0 {COLORS.ERROR}, stop:1 #dc2626);
+                color: {COLORS.TEXT_PRIMARY};
                 border: none;
                 border-radius: 8px;
                 padding: 12px 24px;
                 font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
+                font-weight: 600;
+                font-family: 'Inter', sans-serif;
+            }}
+            QPushButton:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #7c8ff0, stop:1 #8a5cb8);
-            }
+                    stop:0 #f87171, stop:1 {COLORS.ERROR});
+                transform: translateY(-1px);
+            }}
         """)
         layout.addWidget(close_btn)
 
         self.apply_dark_mode()
 
     def apply_dark_mode(self):
-        self.setStyleSheet("""
-            QWidget {
+        """Apply modern Neo Cyber color scheme to match main GUI."""
+        self.setStyleSheet(f"""
+            QWidget {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #0f0c29, stop:0.5 #302b63, stop:1 #24243e);
-                color: #f0f6fc;
-            }
-            QTextEdit {
-                background: #0d1117;
-                color: #f0f6fc;
-                border: 2px solid #30363d;
-                border-radius: 8px;
-                padding: 12px;
+                    stop:0 {COLORS.BG_DEEP},
+                    stop:0.5 #0f0f14,
+                    stop:1 {COLORS.BG_DEEP});
+                color: {COLORS.TEXT_PRIMARY};
+                font-family: 'Inter', sans-serif;
+            }}
+            QTextEdit {{
+                background: {COLORS.BG_CARD};
+                color: {COLORS.TEXT_PRIMARY};
+                border: 1.5px solid {COLORS.BORDER_DEFAULT};
+                border-radius: 12px;
+                padding: 16px;
+                font-family: 'Fira Code', 'Consolas', monospace;
                 font-size: 11pt;
-            }
+                line-height: 1.6;
+            }}
+            QTextEdit:focus {{
+                border: 1.5px solid {COLORS.PRIMARY};
+            }}
         """)
 
 # --------------------------------------------------------------------------- #
@@ -895,6 +1014,7 @@ class FGDGUI(QWidget):
             self._build_ui()
             self.timer = QTimer()
             self.timer.timeout.connect(self.update_logs)
+            self.timer.timeout.connect(self.check_backend_health)  # HEALTH MONITORING
             self.timer.start(1000)
 
             self._start_header_animation()
@@ -977,25 +1097,37 @@ class FGDGUI(QWidget):
             logger.warning(f"Could not save session: {e}")
 
     def show_toast(self, message: str, toast_type: str = "info"):
-        """Show a toast notification."""
+        """Show a toast notification (P1 FIX: GUI-2 - proper repositioning)."""
         try:
             toast = ToastNotification(message, toast_type, self)
-
-            # Position at bottom-right of window
-            x = self.width() - toast.width() - 20
-            y = self.height() - toast.height() - 20 - (len(self._toast_notifications) * (toast.height() + 10))
-
-            # Map to global coordinates
-            global_pos = self.mapToGlobal(QPoint(x, y))
-            toast.move(global_pos)
+            self._toast_notifications.append(toast)
+            self._reposition_toasts()  # Reposition all toasts
             toast.show()
 
-            self._toast_notifications.append(toast)
+            # Auto-remove after 4 seconds and reposition remaining
+            def remove_toast():
+                if toast in self._toast_notifications:
+                    self._toast_notifications.remove(toast)
+                    toast.close()
+                    self._reposition_toasts()  # Reposition remaining toasts
 
-            # Remove from list when closed
-            toast.destroyed.connect(lambda: self._toast_notifications.remove(toast) if toast in self._toast_notifications else None)
+            QTimer.singleShot(4000, remove_toast)
         except Exception as e:
             logger.error(f"Error showing toast: {e}")
+
+    def _reposition_toasts(self):
+        """Reposition all visible toasts (P1 FIX: GUI-2)."""
+        try:
+            y_offset = self.height() - 20
+            for toast in reversed(self._toast_notifications):
+                if toast and not toast.isHidden():
+                    y_offset -= toast.height()
+                    x = self.width() - toast.width() - 20
+                    global_pos = self.mapToGlobal(QPoint(x, y_offset))
+                    toast.move(global_pos)
+                    y_offset -= 10  # Gap between toasts
+        except Exception as e:
+            logger.debug(f"Error repositioning toasts: {e}")
 
     def _add_header(self):
         """Add the ultra-modern gradient header banner."""
@@ -1183,6 +1315,7 @@ class FGDGUI(QWidget):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabel("Files")
         self.tree.itemClicked.connect(self.on_file_click)
+        self.tree.itemExpanded.connect(self.on_tree_item_expanded)  # P1 FIX: GUI-16 lazy loading
         self.tree.setAlternatingRowColors(True)
         self.tree.setStyleSheet(f"""
             QTreeWidget {{
@@ -1522,32 +1655,72 @@ class FGDGUI(QWidget):
         self._add_tree_items(root_item, Path(root))
         root_item.setExpanded(True)
 
-    def _add_tree_items(self, parent, path):
+    def _add_tree_items(self, parent, path, lazy=True):
+        """Add tree items with optional lazy loading (P1 FIX: GUI-16)."""
         try:
             for p in sorted(path.iterdir(), key=lambda x: (not x.is_dir(), x.name)):
-                if p.name.startswith('.') or p.name in ['node_modules', '__pycache__']:
+                if p.name.startswith('.') or p.name in ['node_modules', '__pycache__', '.git', '__MACOSX']:
                     continue
                 item = QTreeWidgetItem([p.name])
                 item.setData(0, Qt.ItemDataRole.UserRole, str(p))
                 parent.addChild(item)
+
                 if p.is_dir():
-                    self._add_tree_items(item, p)
+                    if lazy:
+                        # Add placeholder for lazy loading
+                        placeholder = QTreeWidgetItem(["..."])
+                        item.addChild(placeholder)
+                        # Store path for lazy loading
+                        item.setData(0, Qt.ItemDataRole.UserRole + 1, str(p))
+                    else:
+                        # Load immediately (non-lazy)
+                        self._add_tree_items(item, p, lazy=True)
         except Exception as e:
             logger.warning(f"Error adding tree items for {path}: {e}")
 
+    def on_tree_item_expanded(self, item):
+        """Load children when item expanded - lazy loading (P1 FIX: GUI-16)."""
+        try:
+            # Check if this item has placeholder children
+            if item.childCount() == 1 and item.child(0).text(0) == "...":
+                # Remove placeholder
+                item.removeChild(item.child(0))
+
+                # Load actual children
+                path_str = item.data(0, Qt.ItemDataRole.UserRole + 1)
+                if path_str:
+                    path = Path(path_str)
+                    if path.exists() and path.is_dir():
+                        self._add_tree_items(item, path, lazy=True)
+        except Exception as e:
+            logger.warning(f"Error expanding tree item: {e}")
+
     def on_file_click(self, item, column):
+        """Handle file click with loading indicator (P1 FIX: GUI-11)."""
         try:
             file_path = item.data(0, Qt.ItemDataRole.UserRole)
             if file_path and Path(file_path).is_file():
                 path = Path(file_path)
-                if path.stat().st_size > 500_000:
-                    self.preview.setPlainText(f"File too large to preview: {path.stat().st_size / 1024:.1f} KB")
+                file_size = path.stat().st_size
+
+                if file_size > 500_000:
+                    self.preview.setPlainText(f"File too large to preview: {file_size / 1024:.1f} KB")
                     return
+
+                # Show loading indicator for files > 100KB
+                loader = None
+                if file_size > 100_000:
+                    loader = LoadingOverlay(f"Loading {path.name}...", self)
+                    loader.show_loading()
+
                 try:
                     content = path.read_text(encoding='utf-8')
                     self.preview.setPlainText(content)
                 except UnicodeDecodeError:
                     self.preview.setPlainText("[Binary file - cannot preview]")
+                finally:
+                    if loader:
+                        loader.close()
         except Exception as e:
             logger.error(f"Error previewing file: {e}")
             self.preview.setPlainText(f"Error: {str(e)}")
@@ -1626,106 +1799,156 @@ class FGDGUI(QWidget):
             self.start_server()
 
     def start_server(self):
+        """Start the backend server with loading indicator (P1 FIX: GUI-11)."""
         dir_path = self.path_edit.text().strip()
         if not dir_path or not Path(dir_path).exists():
             self.connection_status.set_status("error", "🔴 Invalid project directory")
             return
 
-        provider = self.provider.currentText()
-        self.memory_file_path = Path(dir_path) / ".fgd_memory.json"
-        self._memory_last_mtime = None
-        self._update_memory_usage()
-
-        config = {
-            "watch_dir": dir_path,
-            "memory_file": str(self.memory_file_path),
-            "context_limit": 20,
-            "scan": {"max_dir_size_gb": 2, "max_files_per_scan": 5, "max_file_size_kb": 250},
-            "reference_dirs": [],
-            "llm": {
-                "default_provider": provider,
-                "providers": {
-                    "grok": {"model": "grok-beta", "base_url": "https://api.x.ai/v1"},
-                    "openai": {"model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1"},
-                    "claude": {"model": "claude-3-5-sonnet-20241022", "base_url": "https://api.anthropic.com/v1"},
-                    "ollama": {"model": "llama3", "base_url": "http://localhost:11434/v1"}
-                }
-            }
-        }
-        config_path = Path(dir_path) / "fgd_config.yaml"
-        config_path.write_text(yaml.dump(config))
-
-        self.log_file = Path(dir_path) / "fgd_server.log"
-        self.log_file.write_text("")
-
-        env = os.environ.copy()
-
-        # Use absolute path to mcp_backend.py (in MCPM directory, not user's project)
-        mcpm_root = Path(__file__).parent.resolve()
-        backend_script = mcpm_root / "mcp_backend.py"
-
-        if not backend_script.exists():
-            logger.error(f"Backend script not found: {backend_script}")
-            self.connection_status.set_status("error", "🚨 Backend script missing")
-            QMessageBox.critical(self, "Missing Backend", f"Could not find mcp_backend.py at:\n{backend_script}")
-            return
-
-        logger.info(f"Starting backend: {backend_script}")
-        logger.info(f"Config path: {config_path}")
-        logger.info(f"Working directory: {mcpm_root}")
+        # Show loading indicator while starting server
+        loader = LoadingOverlay("Starting backend server...", self)
+        loader.show_loading()
 
         try:
-            self.process = subprocess.Popen(
-                [sys.executable, str(backend_script), str(config_path)],
-                cwd=str(mcpm_root),  # Run from MCPM directory, not user's project
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-        except Exception as exc:
-            logger.error(f"Failed to launch backend: {exc}")
-            self.connection_status.set_status("error", "🚨 Failed to launch backend")
-            QMessageBox.critical(self, "Launch Error", f"Could not start backend:\n{exc}")
-            return
+            provider = self.provider.currentText()
+            self.memory_file_path = Path(dir_path) / ".fgd_memory.json"
+            self._memory_last_mtime = None
+            self._update_memory_usage()
 
-        # Start background threads to read subprocess output
-        stdout_thread = threading.Thread(target=self._read_subprocess_stdout, daemon=True)
-        stderr_thread = threading.Thread(target=self._read_subprocess_stderr, daemon=True)
-        stdout_thread.start()
-        stderr_thread.start()
-        logger.info("Subprocess output monitoring threads started")
+            config = {
+                "watch_dir": dir_path,
+                "memory_file": str(self.memory_file_path),
+                "context_limit": 20,
+                "scan": {"max_dir_size_gb": 2, "max_files_per_scan": 5, "max_file_size_kb": 250},
+                "reference_dirs": [],
+                "llm": {
+                    "default_provider": provider,
+                    "providers": {
+                        "grok": {"model": "grok-beta", "base_url": "https://api.x.ai/v1"},
+                        "openai": {"model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1"},
+                        "claude": {"model": "claude-3-5-sonnet-20241022", "base_url": "https://api.anthropic.com/v1"},
+                        "ollama": {"model": "llama3", "base_url": "http://localhost:11434/v1"}
+                    }
+                }
+            }
+            config_path = Path(dir_path) / "fgd_config.yaml"
+            config_path.write_text(yaml.dump(config))
 
-        self.connection_status.set_status("running", f"🟢 Running on {provider}")
-        self.start_btn.setText("⏹ Stop Server")
-        self.log_summary_label.setText("Awaiting log data…")
-        self.update_memory_explorer(force=True)
+            self.log_file = Path(dir_path) / "fgd_server.log"
+            self.log_file.write_text("")
+
+            env = os.environ.copy()
+
+            # Use absolute path to mcp_backend.py (in MCPM directory, not user's project)
+            mcpm_root = Path(__file__).parent.resolve()
+            backend_script = mcpm_root / "mcp_backend.py"
+
+            if not backend_script.exists():
+                logger.error(f"Backend script not found: {backend_script}")
+                self.connection_status.set_status("error", "🚨 Backend script missing")
+                QMessageBox.critical(self, "Missing Backend", f"Could not find mcp_backend.py at:\n{backend_script}")
+                return
+
+            logger.info(f"Starting backend: {backend_script}")
+            logger.info(f"Config path: {config_path}")
+            logger.info(f"Working directory: {mcpm_root}")
+
+            try:
+                self.process = subprocess.Popen(
+                    [sys.executable, str(backend_script), str(config_path)],
+                    cwd=str(mcpm_root),  # Run from MCPM directory, not user's project
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+            except Exception as exc:
+                logger.error(f"Failed to launch backend: {exc}")
+                self.connection_status.set_status("error", "🚨 Failed to launch backend")
+                QMessageBox.critical(self, "Launch Error", f"Could not start backend:\n{exc}")
+                return
+
+            # Start background threads to read subprocess output
+            stdout_thread = threading.Thread(target=self._read_subprocess_stdout, daemon=True)
+            stderr_thread = threading.Thread(target=self._read_subprocess_stderr, daemon=True)
+            stdout_thread.start()
+            stderr_thread.start()
+            logger.info("Subprocess output monitoring threads started")
+
+            self.connection_status.set_status("running", f"🟢 Running on {provider}")
+            self.start_btn.setText("⏹ Stop Server")
+            self.log_summary_label.setText("Awaiting log data…")
+            self.update_memory_explorer(force=True)
+        finally:
+            # Close loading indicator
+            loader.close()
 
     def update_logs(self):
         if not self.log_file or not self.log_file.exists():
             return
         try:
-            lines = self.log_file.read_text().splitlines()
+            # Initialize tracking variables on first run
+            if not hasattr(self, '_log_last_pos'):
+                self._log_last_pos = 0
+                self._log_last_level = "All"
+                self._log_last_search = ""
+
             level = self.level.currentText()
             search = self.search.text().lower()
-            filtered = []
-            for line in lines:
-                if level != "All" and level not in line:
-                    continue
-                if search and search not in line.lower():
-                    continue
-                filtered.append(line)
 
-            self.log_view.clear()
-            for line in filtered:
-                cursor = self.log_view.textCursor()
-                cursor.movePosition(QTextCursor.MoveOperation.End)
-                self.log_view.setTextCursor(cursor)
-                self.log_view.setTextColor(self._log_color_for_line(line))
-                self.log_view.insertPlainText(line + "\n")
+            # Check if filters changed - if so, we need to rebuild
+            filters_changed = (level != self._log_last_level or search != self._log_last_search)
+
+            if filters_changed:
+                # Filters changed - do a full rebuild
+                self._log_last_level = level
+                self._log_last_search = search
+                self._log_last_pos = 0
+                self.log_view.clear()
+
+                # Read entire file and apply filters
+                lines = self.log_file.read_text().splitlines()
+                for line in lines:
+                    if level != "All" and level not in line:
+                        continue
+                    if search and search not in line.lower():
+                        continue
+
+                    cursor = self.log_view.textCursor()
+                    cursor.movePosition(QTextCursor.MoveOperation.End)
+                    self.log_view.setTextCursor(cursor)
+                    self.log_view.setTextColor(self._log_color_for_line(line))
+                    self.log_view.insertPlainText(line + "\n")
+
+                self._log_last_pos = self.log_file.stat().st_size
+            else:
+                # Filters unchanged - only read new lines (PERFORMANCE FIX)
+                file_size = self.log_file.stat().st_size
+
+                # Only process if file has grown
+                if file_size > self._log_last_pos:
+                    with open(self.log_file, 'r') as f:
+                        f.seek(self._log_last_pos)
+                        new_lines = f.readlines()
+                        self._log_last_pos = f.tell()
+
+                    # Append only new filtered lines
+                    for line in new_lines:
+                        line = line.rstrip('\n')
+                        if level != "All" and level not in line:
+                            continue
+                        if search and search not in line.lower():
+                            continue
+
+                        cursor = self.log_view.textCursor()
+                        cursor.movePosition(QTextCursor.MoveOperation.End)
+                        self.log_view.setTextCursor(cursor)
+                        self.log_view.setTextColor(self._log_color_for_line(line))
+                        self.log_view.insertPlainText(line + "\n")
 
             if hasattr(self, "log_summary_label"):
-                self.log_summary_label.setText(f"Showing {len(filtered)} log lines")
+                total_lines = self.log_view.document().lineCount()
+                self.log_summary_label.setText(f"Showing {total_lines} log lines")
 
             self._update_memory_usage()
             self.update_memory_explorer()
@@ -1734,6 +1957,38 @@ class FGDGUI(QWidget):
             self.check_pending_edits()
         except Exception as e:
             logger.debug(f"Error updating logs: {e}")
+
+    def check_backend_health(self):
+        """Monitor backend process health and detect crashes (P0 FIX: GUI-18)."""
+        if not self.process:
+            return
+
+        try:
+            # Check if process is still running
+            poll_result = self.process.poll()
+
+            if poll_result is not None:
+                # Process has terminated!
+                logger.error(f"Backend process crashed with exit code: {poll_result}")
+
+                # Update UI to reflect crashed state
+                if hasattr(self, 'connection_status'):
+                    self.connection_status.set_status("error", f"🔴 Crashed (exit code {poll_result})")
+
+                if hasattr(self, 'start_btn'):
+                    self.start_btn.setText("▶ Start Server")
+
+                # Show toast notification
+                self.show_toast(
+                    f"Backend process crashed (exit code {poll_result}). Check logs for details.",
+                    "error"
+                )
+
+                # Clean up
+                self.process = None
+
+        except Exception as e:
+            logger.debug(f"Error checking backend health: {e}")
 
     def update_memory_explorer(self, force: bool = False) -> None:
         if not hasattr(self, "memory_tree"):
@@ -2020,11 +2275,13 @@ class FGDGUI(QWidget):
         # Save session settings
         self._save_session()
 
-        # Stop timers
-        if hasattr(self, "timer") and self.timer.isActive():
+        # Stop timers (P1 FIX: GUI-4 - proper cleanup)
+        if hasattr(self, "timer") and self.timer:
             self.timer.stop()
-        if hasattr(self, "_header_timer") and self._header_timer.isActive():
+            self.timer.deleteLater()
+        if hasattr(self, "_header_timer") and self._header_timer:
             self._header_timer.stop()
+            self._header_timer.deleteLater()
 
         # Stop subprocess with proper cleanup
         if self.process:

@@ -26,6 +26,20 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import traceback
 from dotenv import load_dotenv
+import time
+import uuid
+
+# Cross-platform file locking
+try:
+    import fcntl  # Unix/Linux/Mac
+    HAS_FCNTL = True
+except ImportError:
+    HAS_FCNTL = False
+    try:
+        import msvcrt  # Windows
+        HAS_MSVCRT = True
+    except ImportError:
+        HAS_MSVCRT = False
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -54,24 +68,91 @@ class FileChangeHandler(FileSystemEventHandler):
         if not event.is_directory:
             self.callback('deleted', event.src_path)
 
+class FileLock:
+    """Cross-platform file locking context manager."""
+
+    def __init__(self, file_path, timeout=10):
+        self.file_path = Path(file_path)
+        self.lock_file = self.file_path.with_suffix('.lock')
+        self.timeout = timeout
+        self.lock_fd = None
+
+    def __enter__(self):
+        """Acquire lock with timeout."""
+        start_time = time.time()
+
+        while True:
+            try:
+                # Create lock file
+                self.lock_fd = open(self.lock_file, 'w')
+
+                if HAS_FCNTL:
+                    # Unix/Linux/Mac: Use fcntl
+                    fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                elif HAS_MSVCRT:
+                    # Windows: Use msvcrt
+                    msvcrt.locking(self.lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    # No locking available - log warning
+                    logger.warning("File locking not available on this platform")
+
+                return self
+
+            except (IOError, OSError) as e:
+                # Lock is held by another process
+                if self.lock_fd:
+                    self.lock_fd.close()
+                    self.lock_fd = None
+
+                if time.time() - start_time >= self.timeout:
+                    raise TimeoutError(f"Could not acquire lock on {self.lock_file} after {self.timeout}s")
+
+                # Wait a bit before retrying
+                time.sleep(0.1)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Release lock."""
+        if self.lock_fd:
+            try:
+                if HAS_FCNTL:
+                    fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_UN)
+                elif HAS_MSVCRT:
+                    msvcrt.locking(self.lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
+            except:
+                pass
+            finally:
+                self.lock_fd.close()
+                # Clean up lock file
+                try:
+                    self.lock_file.unlink()
+                except:
+                    pass
+
 class MemoryStore:
     def __init__(self, memory_file: Path, config: Dict):
         self.memory_file = memory_file
         self.limit = config.get('context_limit', 20)
+        self.max_memory_entries = config.get('max_memory_entries', 1000)  # P2 FIX: MEMORY-5
         loaded_data = self._load()
         self.memories = loaded_data.get('memories', {}) if isinstance(loaded_data, dict) else loaded_data
         self.context = loaded_data.get('context', []) if isinstance(loaded_data, dict) else []
+        self._prune_if_needed()  # P2 FIX: MEMORY-5 - prune on startup if needed
 
     def _load(self):
         if self.memory_file.exists():
             try:
-                data = json.loads(self.memory_file.read_text())
-                # Handle both old format (just memories) and new format (memories + context)
-                if isinstance(data, dict) and 'memories' in data:
-                    return data
-                else:
-                    # Old format - just memories dict
-                    return {'memories': data, 'context': []}
+                # Use file locking to prevent reading during writes
+                with FileLock(self.memory_file, timeout=5):
+                    data = json.loads(self.memory_file.read_text())
+                    # Handle both old format (just memories) and new format (memories + context)
+                    if isinstance(data, dict) and 'memories' in data:
+                        return data
+                    else:
+                        # Old format - just memories dict
+                        return {'memories': data, 'context': []}
+            except TimeoutError as e:
+                logger.warning(f"Memory load timeout (file locked): {e}")
+                return {'memories': {}, 'context': []}
             except Exception as e:
                 logger.error(f"Memory load error: {e}")
                 return {'memories': {}, 'context': []}
@@ -85,13 +166,30 @@ class MemoryStore:
                 "memories": self.memories,
                 "context": self.context
             }
-            self.memory_file.write_text(json.dumps(full_data, indent=2))
+
+            # Use file locking to prevent concurrent writes
+            with FileLock(self.memory_file, timeout=10):
+                # Atomic write: write to temp file, then rename
+                temp_file = self.memory_file.with_suffix('.tmp')
+                temp_file.write_text(json.dumps(full_data, indent=2))
+
+                # Set restrictive permissions (600 = owner read/write only)
+                try:
+                    os.chmod(temp_file, 0o600)
+                except Exception as perm_error:
+                    logger.warning(f"Could not set file permissions: {perm_error}")
+
+                # Atomic rename (POSIX guarantees atomicity)
+                temp_file.replace(self.memory_file)
+
             # Verify write succeeded
             if self.memory_file.exists():
                 size = self.memory_file.stat().st_size
                 logger.debug(f"✅ Memory saved: {self.memory_file.resolve()} ({size} bytes)")
         except Exception as e:
             logger.error(f"❌ Memory save error to {self.memory_file.resolve()}: {e}")
+            # CRITICAL FIX: Re-raise exception to prevent silent data loss
+            raise
 
     def remember(self, key, value, category="general"):
         if category not in self.memories:
@@ -101,6 +199,7 @@ class MemoryStore:
             "timestamp": datetime.now().isoformat(),
             "access_count": 0
         }
+        self._prune_if_needed()  # P2 FIX: MEMORY-5 - prune before saving
         self._save()
 
     def recall(self, key=None, category=None):
@@ -118,6 +217,48 @@ class MemoryStore:
             self.context = self.context[-self.limit:]
         self._save()  # FIX: Persist context to disk immediately
 
+    def _prune_if_needed(self):
+        """Prune old memory entries if size exceeds limit (P2 FIX: MEMORY-5)."""
+        try:
+            # Count total entries across all categories
+            total_entries = sum(len(entries) for entries in self.memories.values())
+
+            if total_entries <= self.max_memory_entries:
+                return  # No pruning needed
+
+            # Calculate how many to remove
+            entries_to_remove = total_entries - self.max_memory_entries
+            logger.info(f"Pruning {entries_to_remove} memory entries (total: {total_entries}, max: {self.max_memory_entries})")
+
+            # Collect all entries with metadata for LRU sorting
+            all_entries = []
+            for category, entries in self.memories.items():
+                for key, value in entries.items():
+                    all_entries.append({
+                        'category': category,
+                        'key': key,
+                        'timestamp': value.get('timestamp', ''),
+                        'access_count': value.get('access_count', 0),
+                        'value': value
+                    })
+
+            # Sort by access_count (ascending) then timestamp (oldest first)
+            # This implements LRU: least accessed and oldest entries are removed first
+            all_entries.sort(key=lambda x: (x['access_count'], x['timestamp']))
+
+            # Remove the least recently used entries
+            for i in range(entries_to_remove):
+                entry = all_entries[i]
+                if entry['category'] in self.memories and entry['key'] in self.memories[entry['category']]:
+                    del self.memories[entry['category']][entry['key']]
+
+            # Clean up empty categories
+            self.memories = {k: v for k, v in self.memories.items() if v}
+
+            logger.info(f"✅ Pruned {entries_to_remove} entries. New total: {sum(len(e) for e in self.memories.values())}")
+        except Exception as e:
+            logger.error(f"Error pruning memory: {e}")
+
     def get_context(self):
         return self.context
 
@@ -125,6 +266,22 @@ class LLMBackend:
     def __init__(self, config: Dict):
         self.config = config['llm']
         self.default = config['llm']['default_provider']
+
+    async def _retry_request(self, func, max_retries=3, initial_delay=2):
+        """Retry helper for network requests (P2 FIX: MCP-5)."""
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                return await func()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    delay = initial_delay * (2 ** attempt)  # Exponential backoff
+                    logger.warning(f"Request failed (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {e}")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"Request failed after {max_retries} attempts: {e}")
+        raise last_error
 
     async def query(self, prompt: str, provider: str = None, model: str = None, context: str = "") -> str:
         provider = provider or self.default
@@ -136,7 +293,9 @@ class LLMBackend:
         model = model or conf['model']
         base_url = conf['base_url']
 
-        timeout = aiohttp.ClientTimeout(total=30)
+        # P2 FIX: MCP-3 - Configurable timeouts per provider
+        timeout_seconds = conf.get('timeout', 30)  # Default 30s if not configured
+        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
 
         try:
             if provider == "grok":
@@ -145,13 +304,18 @@ class LLMBackend:
                     return "Error: XAI_API_KEY not set"
                 headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
                 data = {"model": model, "messages": [{"role": "user", "content": full_prompt}]}
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
-                        if r.status != 200:
-                            txt = await r.text()
-                            return f"Grok API Error {r.status}: {txt}"
-                        resp = await r.json()
-                        return resp['choices'][0]['message']['content']
+
+                # P2 FIX: MCP-5 - Wrap with retry logic
+                async def make_request():
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
+                            if r.status != 200:
+                                txt = await r.text()
+                                return f"Grok API Error {r.status}: {txt}"
+                            resp = await r.json()
+                            return resp['choices'][0]['message']['content']
+
+                return await self._retry_request(make_request)
 
             elif provider == "openai":
                 api_key = os.getenv("OPENAI_API_KEY")
@@ -159,13 +323,18 @@ class LLMBackend:
                     return "Error: OPENAI_API_KEY not set"
                 headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
                 data = {"model": model, "messages": [{"role": "user", "content": full_prompt}]}
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
-                        if r.status != 200:
-                            txt = await r.text()
-                            return f"OpenAI API Error {r.status}: {txt}"
-                        resp = await r.json()
-                        return resp['choices'][0]['message']['content']
+
+                # P2 FIX: MCP-5 - Wrap with retry logic
+                async def make_request():
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
+                            if r.status != 200:
+                                txt = await r.text()
+                                return f"OpenAI API Error {r.status}: {txt}"
+                            resp = await r.json()
+                            return resp['choices'][0]['message']['content']
+
+                return await self._retry_request(make_request)
 
             elif provider == "claude":
                 api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -181,25 +350,35 @@ class LLMBackend:
                     "messages": [{"role": "user", "content": full_prompt}],
                     "max_tokens": 4096
                 }
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{base_url}/messages", json=data, headers=headers) as r:
-                        if r.status != 200:
-                            txt = await r.text()
-                            return f"Claude API Error {r.status}: {txt}"
-                        resp = await r.json()
-                        return resp['content'][0]['text']
+
+                # P2 FIX: MCP-5 - Wrap with retry logic
+                async def make_request():
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(f"{base_url}/messages", json=data, headers=headers) as r:
+                            if r.status != 200:
+                                txt = await r.text()
+                                return f"Claude API Error {r.status}: {txt}"
+                            resp = await r.json()
+                            return resp['content'][0]['text']
+
+                return await self._retry_request(make_request)
 
             elif provider == "ollama":
                 # Ollama doesn't require an API key (local)
                 headers = {"Content-Type": "application/json"}
                 data = {"model": model, "messages": [{"role": "user", "content": full_prompt}]}
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
-                        if r.status != 200:
-                            txt = await r.text()
-                            return f"Ollama API Error {r.status}: {txt}"
-                        resp = await r.json()
-                        return resp['choices'][0]['message']['content']
+
+                # P2 FIX: MCP-5 - Wrap with retry logic
+                async def make_request():
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
+                            if r.status != 200:
+                                txt = await r.text()
+                                return f"Ollama API Error {r.status}: {txt}"
+                            resp = await r.json()
+                            return resp['choices'][0]['message']['content']
+
+                return await self._retry_request(make_request)
 
             else:
                 return f"Provider '{provider}' not supported."
@@ -835,23 +1014,28 @@ class FGDMCPServer:
                     context_parts.append(f"\n=== RECENT ACTIVITY ===\n{json.dumps(recent_context, indent=2)}\n=== END RECENT ACTIVITY ===\n")
 
                 context = "".join(context_parts)
-                response = await self.llm.query(prompt, "grok", context=context)
+                # P1 FIX (MCP-1): Use configured default provider instead of hardcoded "grok"
+                provider = self.llm.default
+                response = await self.llm.query(prompt, provider, context=context)
 
                 # Save conversation as prompt + response pairs
                 timestamp = datetime.now().isoformat()
+                # P1 FIX (MEMORY-4): Use UUID for chat keys to prevent collisions
+                chat_id = str(uuid.uuid4())
                 conversation_entry = {
+                    "id": chat_id,
                     "prompt": prompt,
                     "response": response,
-                    "provider": "grok",
+                    "provider": provider,  # Use actual provider
                     "timestamp": timestamp,
                     "context_used": len(self.memory.get_context())
                 }
 
-                # Store in conversations category for threading
-                self.memory.remember(f"chat_{timestamp}", conversation_entry, "conversations")
+                # Store in conversations category for threading (using UUID instead of timestamp)
+                self.memory.remember(f"chat_{chat_id}", conversation_entry, "conversations")
 
                 # Also keep in llm category for backward compatibility
-                self.memory.remember(f"grok_{timestamp}", response, "llm")
+                self.memory.remember(f"{provider}_{timestamp}", response, "llm")
 
                 logger.info(f"Chat saved: prompt={prompt[:50]}..., response={response[:50]}...")
                 return [TextContent(type="text", text=response)]
