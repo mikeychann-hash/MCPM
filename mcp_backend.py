@@ -132,9 +132,11 @@ class MemoryStore:
     def __init__(self, memory_file: Path, config: Dict):
         self.memory_file = memory_file
         self.limit = config.get('context_limit', 20)
+        self.max_memory_entries = config.get('max_memory_entries', 1000)  # P2 FIX: MEMORY-5
         loaded_data = self._load()
         self.memories = loaded_data.get('memories', {}) if isinstance(loaded_data, dict) else loaded_data
         self.context = loaded_data.get('context', []) if isinstance(loaded_data, dict) else []
+        self._prune_if_needed()  # P2 FIX: MEMORY-5 - prune on startup if needed
 
     def _load(self):
         if self.memory_file.exists():
@@ -197,6 +199,7 @@ class MemoryStore:
             "timestamp": datetime.now().isoformat(),
             "access_count": 0
         }
+        self._prune_if_needed()  # P2 FIX: MEMORY-5 - prune before saving
         self._save()
 
     def recall(self, key=None, category=None):
@@ -214,6 +217,48 @@ class MemoryStore:
             self.context = self.context[-self.limit:]
         self._save()  # FIX: Persist context to disk immediately
 
+    def _prune_if_needed(self):
+        """Prune old memory entries if size exceeds limit (P2 FIX: MEMORY-5)."""
+        try:
+            # Count total entries across all categories
+            total_entries = sum(len(entries) for entries in self.memories.values())
+
+            if total_entries <= self.max_memory_entries:
+                return  # No pruning needed
+
+            # Calculate how many to remove
+            entries_to_remove = total_entries - self.max_memory_entries
+            logger.info(f"Pruning {entries_to_remove} memory entries (total: {total_entries}, max: {self.max_memory_entries})")
+
+            # Collect all entries with metadata for LRU sorting
+            all_entries = []
+            for category, entries in self.memories.items():
+                for key, value in entries.items():
+                    all_entries.append({
+                        'category': category,
+                        'key': key,
+                        'timestamp': value.get('timestamp', ''),
+                        'access_count': value.get('access_count', 0),
+                        'value': value
+                    })
+
+            # Sort by access_count (ascending) then timestamp (oldest first)
+            # This implements LRU: least accessed and oldest entries are removed first
+            all_entries.sort(key=lambda x: (x['access_count'], x['timestamp']))
+
+            # Remove the least recently used entries
+            for i in range(entries_to_remove):
+                entry = all_entries[i]
+                if entry['category'] in self.memories and entry['key'] in self.memories[entry['category']]:
+                    del self.memories[entry['category']][entry['key']]
+
+            # Clean up empty categories
+            self.memories = {k: v for k, v in self.memories.items() if v}
+
+            logger.info(f"✅ Pruned {entries_to_remove} entries. New total: {sum(len(e) for e in self.memories.values())}")
+        except Exception as e:
+            logger.error(f"Error pruning memory: {e}")
+
     def get_context(self):
         return self.context
 
@@ -221,6 +266,22 @@ class LLMBackend:
     def __init__(self, config: Dict):
         self.config = config['llm']
         self.default = config['llm']['default_provider']
+
+    async def _retry_request(self, func, max_retries=3, initial_delay=2):
+        """Retry helper for network requests (P2 FIX: MCP-5)."""
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                return await func()
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    delay = initial_delay * (2 ** attempt)  # Exponential backoff
+                    logger.warning(f"Request failed (attempt {attempt + 1}/{max_retries}), retrying in {delay}s: {e}")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"Request failed after {max_retries} attempts: {e}")
+        raise last_error
 
     async def query(self, prompt: str, provider: str = None, model: str = None, context: str = "") -> str:
         provider = provider or self.default
@@ -232,7 +293,9 @@ class LLMBackend:
         model = model or conf['model']
         base_url = conf['base_url']
 
-        timeout = aiohttp.ClientTimeout(total=30)
+        # P2 FIX: MCP-3 - Configurable timeouts per provider
+        timeout_seconds = conf.get('timeout', 30)  # Default 30s if not configured
+        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
 
         try:
             if provider == "grok":
@@ -241,13 +304,18 @@ class LLMBackend:
                     return "Error: XAI_API_KEY not set"
                 headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
                 data = {"model": model, "messages": [{"role": "user", "content": full_prompt}]}
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
-                        if r.status != 200:
-                            txt = await r.text()
-                            return f"Grok API Error {r.status}: {txt}"
-                        resp = await r.json()
-                        return resp['choices'][0]['message']['content']
+
+                # P2 FIX: MCP-5 - Wrap with retry logic
+                async def make_request():
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
+                            if r.status != 200:
+                                txt = await r.text()
+                                return f"Grok API Error {r.status}: {txt}"
+                            resp = await r.json()
+                            return resp['choices'][0]['message']['content']
+
+                return await self._retry_request(make_request)
 
             elif provider == "openai":
                 api_key = os.getenv("OPENAI_API_KEY")
@@ -255,13 +323,18 @@ class LLMBackend:
                     return "Error: OPENAI_API_KEY not set"
                 headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
                 data = {"model": model, "messages": [{"role": "user", "content": full_prompt}]}
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
-                        if r.status != 200:
-                            txt = await r.text()
-                            return f"OpenAI API Error {r.status}: {txt}"
-                        resp = await r.json()
-                        return resp['choices'][0]['message']['content']
+
+                # P2 FIX: MCP-5 - Wrap with retry logic
+                async def make_request():
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
+                            if r.status != 200:
+                                txt = await r.text()
+                                return f"OpenAI API Error {r.status}: {txt}"
+                            resp = await r.json()
+                            return resp['choices'][0]['message']['content']
+
+                return await self._retry_request(make_request)
 
             elif provider == "claude":
                 api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -277,25 +350,35 @@ class LLMBackend:
                     "messages": [{"role": "user", "content": full_prompt}],
                     "max_tokens": 4096
                 }
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{base_url}/messages", json=data, headers=headers) as r:
-                        if r.status != 200:
-                            txt = await r.text()
-                            return f"Claude API Error {r.status}: {txt}"
-                        resp = await r.json()
-                        return resp['content'][0]['text']
+
+                # P2 FIX: MCP-5 - Wrap with retry logic
+                async def make_request():
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(f"{base_url}/messages", json=data, headers=headers) as r:
+                            if r.status != 200:
+                                txt = await r.text()
+                                return f"Claude API Error {r.status}: {txt}"
+                            resp = await r.json()
+                            return resp['content'][0]['text']
+
+                return await self._retry_request(make_request)
 
             elif provider == "ollama":
                 # Ollama doesn't require an API key (local)
                 headers = {"Content-Type": "application/json"}
                 data = {"model": model, "messages": [{"role": "user", "content": full_prompt}]}
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
-                        if r.status != 200:
-                            txt = await r.text()
-                            return f"Ollama API Error {r.status}: {txt}"
-                        resp = await r.json()
-                        return resp['choices'][0]['message']['content']
+
+                # P2 FIX: MCP-5 - Wrap with retry logic
+                async def make_request():
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
+                            if r.status != 200:
+                                txt = await r.text()
+                                return f"Ollama API Error {r.status}: {txt}"
+                            resp = await r.json()
+                            return resp['choices'][0]['message']['content']
+
+                return await self._retry_request(make_request)
 
             else:
                 return f"Provider '{provider}' not supported."
