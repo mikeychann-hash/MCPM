@@ -11,6 +11,11 @@ import aiohttp
 from pathlib import Path
 from dotenv import load_dotenv
 
+try:  # Optional dependency so the CLI diagnostic still works without pytest installed
+    import pytest
+except ImportError:  # pragma: no cover - pytest is only needed when running the test suite
+    pytest = None
+
 # Fix UTF-8 encoding on Windows
 try:
     if hasattr(sys.stdout, "reconfigure"):
@@ -45,7 +50,7 @@ def print_warning(text):
 def print_info(text):
     print(f"{Colors.BLUE}[INFO] {text}{Colors.RESET}")
 
-async def test_grok_connection():
+async def run_grok_connection_diagnostic():
     """Main test function."""
     print_header("Grok API Connection Diagnostic")
     print_info("Testing Grok-3 model (grok-beta was deprecated)")
@@ -147,10 +152,18 @@ async def test_grok_connection():
         print_error(f"Connection failed: {e}")
         return False
 
+if pytest:  # pragma: no cover - executed only when pytest is available
+
+    @pytest.mark.skipif(not os.getenv("XAI_API_KEY"), reason="XAI_API_KEY not configured")
+    def test_grok_connection():
+        """Pytest wrapper that executes the diagnostic when credentials are present."""
+        assert asyncio.run(run_grok_connection_diagnostic()) is True
+
+
 async def main():
     """Run all tests."""
     try:
-        success = await test_grok_connection()
+        success = await run_grok_connection_diagnostic()
 
         print_header("Test Summary")
 

@@ -276,6 +276,108 @@ class LLMBackend:
     def __init__(self, config: Dict):
         self.config = config['llm']
         self.default = config['llm']['default_provider']
+        self._normalize_provider_config()
+
+    def _normalize_provider_config(self) -> None:
+        """Patch known-bad legacy provider settings at runtime."""
+        providers = self.config.get('providers', {})
+        grok_conf = providers.get('grok')
+        if not grok_conf:
+            return
+
+        # Ensure the Grok provider always points at a supported model/base URL so the
+        # connection diagnosis downstream has predictable defaults. These settings can
+        # still be overridden explicitly in fgd_config.yaml, but we heal the most common
+        # legacy misconfigurations here to keep the chat experience online.
+        if not grok_conf.get('model'):
+            logger.warning(
+                "Grok provider missing model configuration; defaulting to 'grok-3'"
+            )
+            grok_conf['model'] = 'grok-3'
+        elif grok_conf.get('model') == 'grok-beta':
+            logger.warning(
+                "Grok provider configured with deprecated 'grok-beta' model; upgrading to 'grok-3'"
+            )
+            grok_conf['model'] = 'grok-3'
+
+        if not grok_conf.get('base_url'):
+            logger.warning(
+                "Grok provider missing base_url; defaulting to https://api.x.ai/v1"
+            )
+            grok_conf['base_url'] = 'https://api.x.ai/v1'
+
+    def _diagnose_grok_error(self, status: int, body: str, model: str, base_url: str) -> str:
+        """Return a detailed error message for Grok failures and log diagnostics."""
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = None
+
+        error_message = None
+        if isinstance(payload, dict):
+            error_message = payload.get('error')
+            if isinstance(error_message, dict):
+                error_message = error_message.get('message') or error_message.get('error')
+
+        detail = error_message or (body.strip() if body else "<no response body>")
+
+        logger.error(
+            "Grok API request failed | status=%s | model=%s | endpoint=%s/chat/completions | detail=%s",
+            status,
+            model,
+            base_url,
+            detail,
+        )
+
+        hints = []
+        lowered_detail = detail.lower()
+        if status == 401:
+            hints.append("Verify XAI_API_KEY is set and valid.")
+        elif status == 404 and ("model" in lowered_detail or "not found" in lowered_detail):
+            hints.append(
+                "Model not found. Confirm your configuration uses the supported 'grok-3' model."
+            )
+        elif status == 429:
+            hints.append("Rate limited by Grok. Wait before retrying or reduce request frequency.")
+        elif status >= 500:
+            hints.append("xAI service reported a server error. Retry later or check status.x.ai.")
+
+        message_parts = [f"Grok API Error {status}", detail]
+        if hints:
+            message_parts.append(" ".join(hints))
+        return " - ".join(part for part in message_parts if part)
+
+    @staticmethod
+    def _extract_message_content(response: Dict[str, Any], provider: str) -> str:
+        """Normalize chat completion responses across providers."""
+        try:
+            message = response['choices'][0]['message']['content']
+        except (KeyError, IndexError, TypeError):
+            logger.error(
+                "Unexpected %s response payload: %s",
+                provider,
+                response,
+                exc_info=True,
+            )
+            return f"Error: Unexpected response format from {provider} API"
+
+        if isinstance(message, list):
+            segments = []
+            for entry in message:
+                if isinstance(entry, dict):
+                    text = entry.get('text')
+                    if text:
+                        segments.append(text)
+                elif isinstance(entry, str):
+                    segments.append(entry)
+            if segments:
+                message = "".join(segments)
+            else:
+                message = str(message)
+
+        if not isinstance(message, str):
+            message = str(message)
+        return message
 
     async def _retry_request(self, func, max_retries=3, initial_delay=2):
         """Retry helper for network requests (P2 FIX: MCP-5)."""
@@ -315,15 +417,21 @@ class LLMBackend:
                 headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
                 data = {"model": model, "messages": [{"role": "user", "content": full_prompt}]}
 
+                logger.debug(
+                    "Dispatching Grok request | model=%s | endpoint=%s/chat/completions",
+                    model,
+                    base_url,
+                )
+
                 # P2 FIX: MCP-5 - Wrap with retry logic
                 async def make_request():
                     async with aiohttp.ClientSession(timeout=timeout) as session:
                         async with session.post(f"{base_url}/chat/completions", json=data, headers=headers) as r:
                             if r.status != 200:
                                 txt = await r.text()
-                                return f"Grok API Error {r.status}: {txt}"
+                                return self._diagnose_grok_error(r.status, txt, model, base_url)
                             resp = await r.json()
-                            return resp['choices'][0]['message']['content']
+                            return self._extract_message_content(resp, "grok")
 
                 return await self._retry_request(make_request)
 
@@ -342,7 +450,7 @@ class LLMBackend:
                                 txt = await r.text()
                                 return f"OpenAI API Error {r.status}: {txt}"
                             resp = await r.json()
-                            return resp['choices'][0]['message']['content']
+                            return self._extract_message_content(resp, "openai")
 
                 return await self._retry_request(make_request)
 
@@ -386,7 +494,7 @@ class LLMBackend:
                                 txt = await r.text()
                                 return f"Ollama API Error {r.status}: {txt}"
                             resp = await r.json()
-                            return resp['choices'][0]['message']['content']
+                            return self._extract_message_content(resp, "ollama")
 
                 return await self._retry_request(make_request)
 

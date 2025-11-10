@@ -1829,7 +1829,7 @@ class FGDGUI(QWidget):
                 "llm": {
                     "default_provider": provider,
                     "providers": {
-                        "grok": {"model": "grok-beta", "base_url": "https://api.x.ai/v1"},
+                        "grok": {"model": "grok-3", "base_url": "https://api.x.ai/v1"},
                         "openai": {"model": "gpt-4o-mini", "base_url": "https://api.openai.com/v1"},
                         "claude": {"model": "claude-3-5-sonnet-20241022", "base_url": "https://api.anthropic.com/v1"},
                         "ollama": {"model": "llama3", "base_url": "http://localhost:11434/v1"}
