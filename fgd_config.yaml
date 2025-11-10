@@ -14,9 +14,10 @@ llm:
     openai:
       base_url: https://api.openai.com/v1
       model: gpt-4o-mini
-memory_file: ./.fgd_memory.json
+memory_file: C:\Users\Admin\Desktop\MCPM-main\.fgd_memory.json
+reference_dirs: []
 scan:
   max_dir_size_gb: 2
   max_file_size_kb: 250
   max_files_per_scan: 5
-watch_dir: .
+watch_dir: C:/Users/Admin/Desktop/MCPM-main

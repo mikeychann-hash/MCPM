@@ -1,0 +1,213 @@
+.PHONY: help build up down logs shell test clean
+
+# Variables
+DOCKER_IMAGE := mcpm:latest
+DOCKER_REGISTRY := myregistry
+SERVICE := mcp-backend
+COMPOSE := docker-compose
+
+help:
+	@echo "MCPM Docker Commands"
+	@echo "===================="
+	@echo ""
+	@echo "Build and Start:"
+	@echo "  make build        - Build Docker image"
+	@echo "  make up           - Start all services"
+	@echo "  make down         - Stop all services"
+	@echo "  make restart      - Restart services"
+	@echo ""
+	@echo "Monitoring:"
+	@echo "  make logs         - Follow logs"
+	@echo "  make status       - Show container status"
+	@echo "  make stats        - Show resource usage"
+	@echo "  make health       - Check health status"
+	@echo ""
+	@echo "Development:"
+	@echo "  make shell        - Access container shell"
+	@echo "  make test         - Run tests"
+	@echo "  make lint         - Run linter"
+	@echo ""
+	@echo "Cleanup:"
+	@echo "  make clean        - Remove containers"
+	@echo "  make clean-all    - Remove containers and volumes"
+	@echo "  make prune        - Clean up Docker system"
+
+# Build targets
+build:
+	@echo "Building Docker image..."
+	$(COMPOSE) build --no-cache
+
+build-fast:
+	@echo "Building Docker image (with cache)..."
+	$(COMPOSE) build
+
+# Start/Stop targets
+up:
+	@echo "Starting services..."
+	$(COMPOSE) up -d
+	@sleep 2
+	@$(COMPOSE) ps
+
+down:
+	@echo "Stopping services..."
+	$(COMPOSE) down
+
+restart:
+	@echo "Restarting services..."
+	$(COMPOSE) restart
+
+stop:
+	@echo "Stopping services (without removing)..."
+	$(COMPOSE) stop
+
+# Log targets
+logs:
+	$(COMPOSE) logs -f
+
+logs-backend:
+	$(COMPOSE) logs -f $(SERVICE)
+
+logs-nginx:
+	$(COMPOSE) logs -f api-gateway
+
+logs-tail:
+	$(COMPOSE) logs --tail=100
+
+# Status targets
+status:
+	@echo "Container Status:"
+	$(COMPOSE) ps
+
+stats:
+	@echo "Resource Usage:"
+	docker stats --no-stream
+
+health:
+	@echo "Health Check Status:"
+	@curl -s http://localhost:8000/health || echo "Backend not responding"
+	@echo ""
+	@echo "Service Status:"
+	@$(COMPOSE) ps --services --filter "status=running"
+
+# Development targets
+shell:
+	$(COMPOSE) exec $(SERVICE) /bin/bash
+
+python:
+	$(COMPOSE) exec $(SERVICE) python
+
+shell-nginx:
+	$(COMPOSE) exec api-gateway /bin/sh
+
+shell-redis:
+	$(COMPOSE) exec cache redis-cli
+
+# Test targets
+test:
+	@echo "Running tests..."
+	$(COMPOSE) exec $(SERVICE) python -m pytest tests/
+
+test-unit:
+	@echo "Running unit tests..."
+	$(COMPOSE) exec $(SERVICE) python -m pytest tests/unit/
+
+test-integration:
+	@echo "Running integration tests..."
+	$(COMPOSE) exec $(SERVICE) python -m pytest tests/integration/
+
+lint:
+	@echo "Running linters..."
+	$(COMPOSE) exec $(SERVICE) flake8 .
+
+format:
+	@echo "Formatting code..."
+	$(COMPOSE) exec $(SERVICE) black .
+
+# Cleanup targets
+clean:
+	@echo "Removing containers..."
+	$(COMPOSE) down
+
+clean-all:
+	@echo "Removing containers and volumes..."
+	$(COMPOSE) down -v
+
+clean-images:
+	@echo "Removing images..."
+	docker rmi $(DOCKER_IMAGE)
+
+prune:
+	@echo "Cleaning up Docker system..."
+	docker system prune -f --volumes
+
+# Push/Registry targets
+push:
+	@echo "Pushing image to registry..."
+	docker tag $(DOCKER_IMAGE) $(DOCKER_REGISTRY)/$(DOCKER_IMAGE)
+	docker push $(DOCKER_REGISTRY)/$(DOCKER_IMAGE)
+
+pull:
+	@echo "Pulling image from registry..."
+	docker pull $(DOCKER_REGISTRY)/$(DOCKER_IMAGE)
+
+# Database/Data targets
+backup:
+	@echo "Backing up volumes..."
+	mkdir -p backups
+	docker run --rm \
+	  -v mcpm-main_cache-data:/data \
+	  -v $(PWD)/backups:/backup \
+	  alpine tar czf /backup/cache-$(shell date +%Y%m%d-%H%M%S).tar.gz -C /data .
+
+restore:
+	@echo "Enter backup filename (in backups/):"
+	@read FILE; \
+	docker run --rm \
+	  -v mcpm-main_cache-data:/data \
+	  -v $(PWD)/backups:/backup \
+	  alpine tar xzf /backup/$$FILE -C /data
+
+# Network targets
+network:
+	@echo "Network Configuration:"
+	docker network inspect mcpm-main_mcpm-network
+
+ports:
+	@echo "Port Mapping:"
+	docker-compose port $(SERVICE)
+
+# Version/Info targets
+version:
+	@echo "Docker Version:"
+	docker --version
+	@echo "Docker Compose Version:"
+	docker-compose --version
+
+info:
+	@echo "System Information:"
+	docker system df
+
+# Advanced targets
+rebuild: clean build up
+
+full-restart: down clean build up
+
+logs-all: logs
+
+validate:
+	@echo "Validating docker-compose..."
+	$(COMPOSE) config --quiet && echo "✅ docker-compose.yml is valid"
+
+debug:
+	@echo "Debug Mode - Starting with verbose logging..."
+	$(COMPOSE) exec $(SERVICE) env LOG_LEVEL=DEBUG python mcp_backend.py
+
+watch:
+	@echo "Watching for changes..."
+	while true; do \
+	  inotifywait -r -e modify . 2>/dev/null && \
+	  make rebuild; \
+	done
+
+# Default target
+.DEFAULT_GOAL := help

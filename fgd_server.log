@@ -1,0 +1,9 @@
+2025-11-09 14:26:54,803 - INFO - File watcher started
+2025-11-09 14:26:54,803 - INFO - Approval monitor will be started when event loop is ready
+2025-11-09 14:26:54,805 - INFO - ============================================================
+2025-11-09 14:26:54,805 - INFO - MCP Server starting with configuration:
+2025-11-09 14:26:54,805 - INFO -   Watch dir: C:\Users\Admin\Desktop\MCPM-main
+2025-11-09 14:26:54,805 - INFO -   LLM Provider: grok
+2025-11-09 14:26:54,805 - INFO -   Grok API Key present: True
+2025-11-09 14:26:54,805 - INFO - ============================================================
+2025-11-09 14:26:54,805 - INFO - \u2705 Approval monitor started

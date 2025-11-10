@@ -610,7 +610,7 @@ class ToastNotification(QWidget):
             rect = self.rect()
 
             # Background with glassmorphism
-            gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+            gradient = QLinearGradient(QPointF(rect.topLeft()), QPointF(rect.bottomLeft()))
             gradient.setColorAt(0.0, _color(bg_color, 220))
             gradient.setColorAt(1.0, _color(bg_color, 200))
 
@@ -1016,6 +1016,11 @@ class FGDGUI(QWidget):
             self.timer.timeout.connect(self.update_logs)
             self.timer.timeout.connect(self.check_backend_health)  # HEALTH MONITORING
             self.timer.start(1000)
+
+            # P1 FIX (GUI-15): Separate slower timer for memory explorer to reduce unnecessary tree redraws
+            self.memory_timer = QTimer()
+            self.memory_timer.timeout.connect(lambda: self.update_memory_explorer(force=False))
+            self.memory_timer.start(5000)  # Every 5 seconds instead of every 1 second
 
             self._start_header_animation()
             self.apply_dark_mode()
@@ -1858,7 +1863,7 @@ class FGDGUI(QWidget):
                     [sys.executable, str(backend_script), str(config_path)],
                     cwd=str(mcpm_root),  # Run from MCPM directory, not user's project
                     env=env,
-                    stdin=subprocess.DEVNULL,
+                    stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE
                 )
@@ -1951,7 +1956,8 @@ class FGDGUI(QWidget):
                 self.log_summary_label.setText(f"Showing {total_lines} log lines")
 
             self._update_memory_usage()
-            self.update_memory_explorer()
+            # P1 FIX (GUI-15): update_memory_explorer now called from separate slower timer
+            # Removed from here to reduce unnecessary tree redraws
 
             # Check for pending edits
             self.check_pending_edits()
@@ -2268,6 +2274,26 @@ class FGDGUI(QWidget):
             }}
         """)
 
+    def hideEvent(self, event):
+        """Stop timers when window is hidden (P1 FIX: GUI-4 - prevent CPU waste)."""
+        if hasattr(self, 'timer') and self.timer:
+            self.timer.stop()
+        if hasattr(self, '_header_timer') and self._header_timer:
+            self._header_timer.stop()
+        if hasattr(self, 'memory_timer') and self.memory_timer:
+            self.memory_timer.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        """Resume timers when window is shown (P1 FIX: GUI-4)."""
+        super().showEvent(event)
+        if hasattr(self, 'timer') and self.timer:
+            self.timer.start(1000)
+        if hasattr(self, '_header_timer') and self._header_timer:
+            self._header_timer.start(90)
+        if hasattr(self, 'memory_timer') and self.memory_timer:
+            self.memory_timer.start(5000)
+
     def closeEvent(self, event):
         """Clean shutdown of all resources."""
         logger.info("Application closing, cleaning up...")
@@ -2282,6 +2308,10 @@ class FGDGUI(QWidget):
         if hasattr(self, "_header_timer") and self._header_timer:
             self._header_timer.stop()
             self._header_timer.deleteLater()
+        # P1 FIX (GUI-15): Stop memory timer
+        if hasattr(self, "memory_timer") and self.memory_timer:
+            self.memory_timer.stop()
+            self.memory_timer.deleteLater()
 
         # Stop subprocess with proper cleanup
         if self.process:
@@ -2349,6 +2379,18 @@ def _run_app() -> tuple[int, Optional[QApplication]]:
 
     app = QApplication(sys.argv)
     logger.info("QApplication created successfully")
+
+    # Install Qt message handler to suppress non-critical warnings
+    def qt_message_handler(msg_type, context, message):
+        """Suppress Qt warnings about unknown properties and other non-critical messages."""
+        if any(ignore in message for ignore in ['Unknown property', 'transition']):
+            return  # Silently ignore these warnings
+        # For other messages, log normally
+        if msg_type >= QtMsgType.QtWarningMsg:
+            logger.warning(f"Qt {msg_type}: {message}")
+
+    from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
+    qInstallMessageHandler(qt_message_handler)
 
     try:
         logger.info("Initializing FGDGUI window...")

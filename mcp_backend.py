@@ -179,8 +179,18 @@ class MemoryStore:
                 except Exception as perm_error:
                     logger.warning(f"Could not set file permissions: {perm_error}")
 
-                # Atomic rename (POSIX guarantees atomicity)
-                temp_file.replace(self.memory_file)
+                # Atomic rename with Windows fallback
+                try:
+                    temp_file.replace(self.memory_file)
+                except OSError as replace_error:
+                    # Windows sometimes locks files - try direct write as fallback
+                    try:
+                        self.memory_file.write_text(json.dumps(full_data, indent=2))
+                        temp_file.unlink(missing_ok=True)
+                        logger.debug("Memory saved using fallback write method (Windows lock workaround)")
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback write also failed: {fallback_error}")
+                        raise replace_error
 
             # Verify write succeeded
             if self.memory_file.exists():
@@ -768,6 +778,9 @@ class FGDMCPServer:
                 }),
                 Tool(name="llm_query", description="Ask Grok", inputSchema={
                     "type": "object", "properties": {"prompt": {"type": "string"}}, "required": ["prompt"]
+                }),
+                Tool(name="create_directory", description="Create directory (with parents) - P2-FIX", inputSchema={
+                    "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]
                 })
             ]
 
@@ -780,19 +793,61 @@ class FGDMCPServer:
             if name == "list_directory":
                 rel_path = arguments.get("path", ".")
                 path = self._sanitize(rel_path)
+
+                # P2-FIX (MCP-CONN): Check if path exists before processing
+                if not path.exists():
+                    logger.warning(f"List failed: Directory does not exist: {path.resolve()}")
+                    return [TextContent(type="text", text=f"Error: Directory does not exist: {path.resolve()}")]
+
                 if not path.is_dir():
-                    return [TextContent(type="text", text="Error: Not a directory")]
-                patterns = self._get_gitignore_patterns(self.watch_dir)
-                files = []
-                for p in path.iterdir():
-                    if p.name.startswith('.') or self._matches_gitignore(p, patterns):
-                        continue
-                    files.append({
-                        "name": p.name,
-                        "is_dir": p.is_dir(),
-                        "size": p.stat().st_size if p.is_file() else 0
-                    })
-                return [TextContent(type="text", text=json.dumps({"files": files}, indent=2))]
+                    logger.warning(f"List failed: Not a directory: {path.resolve()}")
+                    return [TextContent(type="text", text=f"Error: Not a directory: {path.resolve()}")]
+
+                try:
+                    patterns = self._get_gitignore_patterns(self.watch_dir)
+                    files = []
+                    filtered_hidden = 0
+                    filtered_gitignore = 0
+
+                    for p in path.iterdir():
+                        if p.name.startswith('.'):
+                            filtered_hidden += 1
+                            logger.debug(f"Filtered (hidden): {p.name}")
+                            continue
+
+                        if self._matches_gitignore(p, patterns):
+                            filtered_gitignore += 1
+                            logger.debug(f"Filtered (gitignore): {p.name}")
+                            continue
+
+                        files.append({
+                            "name": p.name,
+                            "is_dir": p.is_dir(),
+                            "size": p.stat().st_size if p.is_file() else 0
+                        })
+
+                    # P2-FIX (MCP-CONN): Include detailed metadata about filtering
+                    total_entries = len(files) + filtered_hidden + filtered_gitignore
+                    result = {
+                        "path": str(path.resolve()),
+                        "files": files,
+                        "file_count": len(files),
+                        "filtered_count": filtered_hidden + filtered_gitignore,
+                        "filtered_hidden": filtered_hidden,
+                        "filtered_gitignore": filtered_gitignore,
+                        "total_entries": total_entries,
+                        "note": f"Showing {len(files)} visible files ({filtered_hidden} hidden, {filtered_gitignore} gitignored)"
+                    }
+
+                    logger.info(f"📂 Listed {path.resolve()}: {len(files)} visible, {filtered_hidden} hidden, {filtered_gitignore} gitignored")
+                    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+                except PermissionError:
+                    logger.error(f"List failed: Permission denied: {path.resolve()}")
+                    return [TextContent(type="text", text=f"Error: Permission denied accessing {path.resolve()}")]
+                except Exception as e:
+                    logger.error(f"List failed: {path.resolve()}\nException: {e}\n{traceback.format_exc()}")
+                    return [TextContent(type="text", text=f"Error: Failed to list {path.resolve()}\nReason: {e}")]
 
             # ---------- READ FILE ----------
             elif name == "read_file":
@@ -819,28 +874,65 @@ class FGDMCPServer:
                 path = self._sanitize(filepath)
 
                 try:
+                    # P2-FIX (MCP-CONN): Ensure parent directory exists before writing
+                    parent_dir = path.parent
+                    if not parent_dir.exists():
+                        logger.info(f"📁 Parent directory missing, creating: {parent_dir.resolve()}")
+                        parent_dir.mkdir(parents=True, exist_ok=True)
+                        logger.info(f"✅ Parent directory created: {parent_dir.resolve()}")
+
+                    # Create backup if file exists
                     backup = path.with_suffix('.bak')
                     if path.exists():
                         shutil.copy2(path, backup)
                         logger.info(f"📝 Backup created: {backup.resolve()}")
                         self.memory.add_context("backup", {"path": str(backup), "original": filepath})
 
-                    # DEBUG: Log actual write location
+                    # Write file
                     logger.info(f"✍️  Writing file to: {path.resolve()}")
                     path.write_text(content, encoding='utf-8')
 
-                    # Verify write succeeded
+                    # P2-FIX (MCP-CONN): Comprehensive verification
                     if path.exists():
                         size = path.stat().st_size
-                        logger.info(f"✅ Write verified: {path.resolve()} ({size} bytes)")
+                        # Verify content matches
+                        actual_content = path.read_text(encoding='utf-8')
+                        if actual_content == content:
+                            logger.info(f"✅ Write verified: {path.resolve()} ({size} bytes, content matches)")
+                            self.memory.add_context("file_write", {
+                                "path": filepath,
+                                "resolved_path": str(path.resolve()),
+                                "size": size,
+                                "verified": True
+                            })
+                            return [TextContent(type="text", text=f"""✅ File Written Successfully
+Location: {path.resolve()}
+Size: {size} bytes
+Content: Verified
+Backup: {backup.name if backup.exists() else 'None'}""")]
+                        else:
+                            logger.error(f"❌ Write failed: Content mismatch at {path.resolve()}")
+                            return [TextContent(type="text", text=f"Error: File written but content verification failed at {path.resolve()}")]
                     else:
-                        logger.error(f"❌ Write failed: File does not exist after write: {path.resolve()}")
+                        logger.error(f"❌ Write failed: File does not exist after write at {path.resolve()}")
+                        return [TextContent(type="text", text=f"Error: File was not created at {path.resolve()}")]
 
-                    self.memory.add_context("file_write", {"path": filepath, "resolved_path": str(path.resolve())})
-                    return [TextContent(type="text", text=f"Written: {filepath}\nActual location: {path.resolve()}\nBackup: {backup.name}")]
+                except PermissionError as e:
+                    logger.error(f"❌ Permission denied writing to {filepath}: {e}")
+                    return [TextContent(type="text", text=f"Error: Permission denied\nPath: {path.resolve()}\nReason: {e}")]
+                except OSError as e:
+                    # P2-FIX (MCP-CONN): Better error context
+                    context_info = f"""
+Path: {path.resolve()}
+Parent exists: {path.parent.exists()}
+Grandparent exists: {path.parent.parent.exists()}
+Watch dir: {self.watch_dir.resolve()}
+Within watch dir: {str(path).startswith(str(self.watch_dir))}"""
+                    logger.error(f"❌ OS error writing to {filepath}: {e}\nContext:{context_info}")
+                    return [TextContent(type="text", text=f"Error: Failed to write file\nPath: {path.resolve()}\nReason: {e}\nContext: Check if all parent directories can be created")]
                 except Exception as e:
-                    logger.error(f"❌ Write error for {filepath}: {e}")
-                    return [TextContent(type="text", text=f"Error: {e}")]
+                    logger.error(f"❌ Unexpected error writing {filepath}: {e}\n{traceback.format_exc()}")
+                    return [TextContent(type="text", text=f"Error: Unexpected error writing {filepath}\nReason: {e}\nType: {type(e).__name__}")]
 
             # ---------- EDIT FILE ----------
             elif name == "edit_file":
@@ -999,6 +1091,35 @@ class FGDMCPServer:
                     return [TextContent(type="text", text=f"Git log error: {e}")]
 
             # ---------- LLM QUERY ----------
+            # ---------- CREATE DIRECTORY (P2-FIX) ----------
+            elif name == "create_directory":
+                rel_path = arguments.get("path")
+                if not rel_path:
+                    return [TextContent(type="text", text="Error: path argument required")]
+
+                path = self._sanitize(rel_path)
+
+                try:
+                    if path.exists():
+                        if path.is_dir():
+                            logger.info(f"📁 Directory already exists: {path.resolve()}")
+                            return [TextContent(type="text", text=f"✅ Directory already exists: {path.resolve()}")]
+                        else:
+                            logger.error(f"❌ Path exists but is not a directory: {path.resolve()}")
+                            return [TextContent(type="text", text=f"Error: Path exists but is not a directory: {path.resolve()}")]
+
+                    # Create directory with all parents
+                    path.mkdir(parents=True, exist_ok=True)
+                    logger.info(f"✅ Created directory: {path.resolve()}")
+                    return [TextContent(type="text", text=f"✅ Created directory: {path.resolve()}")]
+
+                except PermissionError as e:
+                    logger.error(f"❌ Permission denied creating directory: {path.resolve()}")
+                    return [TextContent(type="text", text=f"Error: Permission denied\nPath: {path.resolve()}\nReason: {e}")]
+                except Exception as e:
+                    logger.error(f"❌ Failed to create directory: {path.resolve()}\nException: {e}\n{traceback.format_exc()}")
+                    return [TextContent(type="text", text=f"Error: Failed to create directory\nPath: {path.resolve()}\nReason: {e}")]
+
             elif name == "llm_query":
                 prompt = arguments["prompt"]
 

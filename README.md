@@ -205,7 +205,7 @@ FGD Fusion Stack Pro provides an MCP-compliant server that bridges your local de
 
 | Provider | Model | Timeout | Retry | Status |
 |----------|-------|---------|-------|--------|
-| **Grok (X.AI)** | grok-beta | 30s (config) | ✅ 3x | ✅ Default |
+| **Grok (X.AI)** | grok-3 | 30s (config) | ✅ 3x | ✅ Default |
 | **OpenAI** | gpt-4o-mini | 60s (config) | ✅ 3x | ✅ Active |
 | **Claude** | claude-3-5-sonnet | 90s (config) | ✅ 3x | ✅ Active |
 | **Ollama** | llama3 (local) | 120s (config) | ✅ 3x | ✅ Active |
@@ -324,7 +324,7 @@ llm:
   default_provider: "grok"             # Default LLM provider
   providers:
     grok:
-      model: "grok-beta"
+      model: "grok-3"
       base_url: "https://api.x.ai/v1"
       timeout: 30                      # NEW: Configurable timeout (seconds)
     openai:
@@ -643,6 +643,333 @@ If deploying in production:
 7. **Logging**: Avoid logging sensitive data (API keys, tokens)
 8. **File Permissions**: Memory files now use 600 (✅ implemented in v6.0)
 9. **Atomic Operations**: Prevent data corruption during writes (✅ implemented in v6.0)
+
+---
+
+## 🔗 Grok API Connection Guide
+
+### ⚠️ IMPORTANT: Model Update
+
+**As of November 2025**, X.AI has deprecated `grok-beta`. You **MUST** use `grok-3` instead.
+
+- ❌ Old: `model: grok-beta` (DEPRECATED - will fail with 404 error)
+- ✅ New: `model: grok-3` (Current model)
+
+MCPM v6.0+ has been updated to use `grok-3` automatically. If you're using an older version, update your `fgd_config.yaml`:
+
+```yaml
+llm:
+  providers:
+    grok:
+      model: grok-3  # Change from grok-beta to grok-3
+```
+
+### Prerequisites
+- Grok API account at [x.ai](https://x.ai/)
+- Valid API key from your X.AI account
+- XAI_API_KEY environment variable set
+- Internet connection to reach `api.x.ai/v1`
+
+### Step 1: Get Your Grok API Key
+
+1. **Visit X.AI**: Go to [https://x.ai/](https://x.ai/)
+2. **Sign Up/Login**: Create account or log in
+3. **Get API Key**:
+   - Navigate to API settings
+   - Generate new API key
+   - Copy the key (it starts with `xai-` prefix typically)
+4. **Save Securely**: Store it in a safe location
+
+### Step 2: Configure MCPM
+
+#### Option A: Using .env File (Recommended)
+
+Create `.env` file in your MCPM root directory:
+
+```env
+# Required for Grok provider
+XAI_API_KEY=xai_your_actual_api_key_here
+
+# Optional: Other providers
+OPENAI_API_KEY=sk-your-openai-key
+ANTHROPIC_API_KEY=sk-ant-your-anthropic-key
+```
+
+#### Option B: Using Environment Variables
+
+**Windows (Command Prompt):**
+```cmd
+set XAI_API_KEY=xai_your_actual_api_key_here
+python gui_main_pro.py
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:XAI_API_KEY = "xai_your_actual_api_key_here"
+python gui_main_pro.py
+```
+
+**Linux/Mac:**
+```bash
+export XAI_API_KEY="xai_your_actual_api_key_here"
+python gui_main_pro.py
+```
+
+### Step 3: Start MCPM
+
+```bash
+# GUI Mode (Recommended)
+python gui_main_pro.py
+
+# Or direct backend mode
+python mcp_backend.py fgd_config.yaml
+```
+
+### Step 4: Verify Connection
+
+The GUI will show:
+- **Connection Status**: "🟢 Running on grok" (green indicator)
+- **Log Output**: "Grok API Key present: True"
+- **Model Info**: "grok-3" model should be displayed
+
+### Troubleshooting Grok Connection
+
+#### Problem: "XAI_API_KEY not set" Error
+
+**Cause**: Environment variable not found
+
+**Solutions**:
+1. Check `.env` file exists and has correct key:
+   ```bash
+   cat .env  # Linux/Mac
+   type .env  # Windows
+   ```
+
+2. Verify key format (should start with `xai-`):
+   ```python
+   import os
+   print(os.getenv("XAI_API_KEY"))
+   ```
+
+3. Restart Python/GUI after setting variable:
+   - Changes to environment variables require restart
+   - `.env` file changes are picked up automatically
+
+#### Problem: "Grok API Error 401: Unauthorized"
+
+**Cause**: Invalid or expired API key
+
+**Solutions**:
+1. Check API key is correct (no spaces, proper prefix)
+2. Regenerate key from X.AI dashboard
+3. Verify key is still active (check account settings)
+4. Test API key directly:
+   ```bash
+   curl -H "Authorization: Bearer xai_YOUR_KEY" \
+     https://api.x.ai/v1/models
+   ```
+
+#### Problem: "Grok API Error 429: Rate Limited"
+
+**Cause**: Too many requests in short time
+
+**Solutions**:
+1. Wait 1-2 minutes before retrying
+2. Check request limit on your account
+3. Upgrade X.AI account if needed
+4. Reduce concurrent queries
+
+#### Problem: "ConnectionError" or "Timeout"
+
+**Cause**: Network connectivity issue
+
+**Solutions**:
+1. Check internet connection: `ping api.x.ai`
+2. Check firewall/proxy settings
+3. Verify API endpoint is reachable:
+   ```bash
+   curl -I https://api.x.ai/v1/chat/completions
+   ```
+4. Check X.AI service status
+
+#### Problem: GUI Shows "Connected" But Grok Doesn't Respond
+
+**Cause**: Backend started but API call failing silently
+
+**Solutions**:
+1. Check logs for actual error:
+   ```bash
+   tail -f fgd_server.log  # Backend logs
+   tail -f mcpm_gui.log    # GUI logs
+   ```
+
+2. Verify in logs:
+   - "Grok API Key present: True"
+   - No "API Error" messages
+   - No timeout warnings
+
+3. Test with simple query in GUI
+4. Check model name matches config: `grok-3`
+
+### Command List: Using Grok via MCPM GUI
+
+#### 1. **Start Server**
+- Click **"Browse"** to select project folder
+- Select **"grok"** from provider dropdown
+- Click **"▶️ Start Server"** button
+- Wait for **"🟢 Running on grok"** status
+
+#### 2. **Query Grok**
+
+In MCP clients or tools that support the `llm_query` tool:
+
+```json
+{
+  "tool": "llm_query",
+  "arguments": {
+    "prompt": "Your question here",
+    "provider": "grok"
+  }
+}
+```
+
+#### 3. **Use File Context**
+
+Query with file context automatically included:
+
+```json
+{
+  "tool": "llm_query",
+  "arguments": {
+    "prompt": "Analyze this code: read_file(src/main.py)",
+    "provider": "grok"
+  }
+}
+```
+
+#### 4. **Store & Recall Information**
+
+Remember something from Grok response:
+
+```json
+{
+  "tool": "remember",
+  "arguments": {
+    "key": "grok_solution",
+    "value": "Solution from Grok response",
+    "category": "llm"
+  }
+}
+```
+
+Recall it later:
+
+```json
+{
+  "tool": "recall",
+  "arguments": {
+    "category": "llm"
+  }
+}
+```
+
+#### 5. **Search Project Files**
+
+```json
+{
+  "tool": "search_in_files",
+  "arguments": {
+    "query": "TODO",
+    "pattern": "**/*.py"
+  }
+}
+```
+
+#### 6. **List Files**
+
+```json
+{
+  "tool": "list_files",
+  "arguments": {
+    "pattern": "**/*.py"
+  }
+}
+```
+
+### REST API: Direct Grok Queries
+
+If using FastAPI wrapper (`python server.py`):
+
+```bash
+# Start FastAPI server
+python server.py
+
+# Query Grok
+curl -X POST http://localhost:8456/api/llm_query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "What is machine learning?",
+    "provider": "grok"
+  }'
+```
+
+### Configuration File Settings
+
+Edit `fgd_config.yaml` for Grok-specific settings:
+
+```yaml
+llm:
+  default_provider: grok
+  providers:
+    grok:
+      model: grok-3              # Model version
+      base_url: https://api.x.ai/v1 # API endpoint
+      timeout: 60                   # Request timeout in seconds
+```
+
+### Best Practices
+
+1. **API Key Security**:
+   - Never commit `.env` to git
+   - Use `.gitignore` to exclude it
+   - Rotate keys periodically
+
+2. **Rate Limiting**:
+   - Keep queries < 4000 tokens
+   - Space out multiple requests
+   - Check X.AI account limits
+
+3. **Error Handling**:
+   - Always check logs (`fgd_server.log`)
+   - Retry with exponential backoff (built-in)
+   - Graceful fallback to other providers
+
+4. **Context Management**:
+   - Limit context window to 20 items (configurable)
+   - Archive old memories with LRU pruning
+   - Clean up unnecessary file changes
+
+### FAQ
+
+**Q: How do I know if Grok is actually connected?**
+A: Check `fgd_server.log` for the line:
+```
+Grok API Key present: True
+MCP Server starting with configuration:
+  LLM Provider: grok
+```
+
+**Q: Can I use multiple providers simultaneously?**
+A: No, only one default provider. Switch by selecting different provider in GUI or setting `default_provider` in config.
+
+**Q: What if my API key expires?**
+A: Generate new key on X.AI dashboard and update `.env` file.
+
+**Q: How much does Grok API cost?**
+A: Check [X.AI pricing](https://x.ai/) - pricing structure varies by tier.
+
+**Q: Can I self-host the backend?**
+A: Yes, `mcp_backend.py` runs locally. It only needs internet for Grok API calls.
 
 ---
 
