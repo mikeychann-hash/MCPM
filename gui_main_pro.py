@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
+    QAbstractAnimation,
     QPoint,
     QPointF,
     QRectF,
