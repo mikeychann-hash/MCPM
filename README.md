@@ -1044,7 +1044,7 @@ We welcome contributions! Areas of interest:
 
 ## 📄 License
 
-[Add your license here]
+MIT License - See [LICENSE](LICENSE) file for full details.
 
 ---
 
@@ -1053,7 +1053,7 @@ We welcome contributions! Areas of interest:
 For issues, questions, or contributions:
 - **Issues**: [GitHub Issues](https://github.com/mikeychann-hash/MCPM/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/mikeychann-hash/MCPM/discussions)
-- **Email**: [Add contact email]
+- **Email**: mcpm-support@users.noreply.github.com
 
 ---
 

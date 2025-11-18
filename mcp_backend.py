@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MCPM v5.0 – Full Filesystem Co‑Pilot
+MCPM v6.0 – Full Filesystem Co‑Pilot
 * Atomic writes + .bak backups
 * .gitignore filtering
 * Reference project support
@@ -118,15 +118,16 @@ class FileLock:
                     fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_UN)
                 elif HAS_MSVCRT:
                     msvcrt.locking(self.lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
-            except:
-                pass
+            except (RuntimeError, ValueError, OSError) as e:
+                logger.warning(f"Lock release failed: {e}")
             finally:
                 self.lock_fd.close()
                 # Clean up lock file
                 try:
                     self.lock_file.unlink()
-                except:
-                    pass
+                except (OSError, PermissionError) as e:
+                    logger.debug(f"Could not remove lock file: {e}")
+        return False  # Don't suppress exceptions
 
 class MemoryStore:
     def __init__(self, memory_file: Path, config: Dict):
@@ -633,8 +634,22 @@ class FGDMCPServer:
                 if not approval_file.exists():
                     continue
 
-                # Read approval
-                approval_data = json.loads(approval_file.read_text())
+                # Read approval with error handling
+                try:
+                    approval_data = json.loads(approval_file.read_text())
+                except json.JSONDecodeError as e:
+                    logger.error(f"Corrupted approval file {approval_file}: {e}")
+                    # Clean up corrupted files
+                    try:
+                        approval_file.unlink(missing_ok=True)
+                        pending_file = self.watch_dir / ".fgd_pending_edit.json"
+                        pending_file.unlink(missing_ok=True)
+                    except Exception as cleanup_err:
+                        logger.error(f"Failed to clean up corrupted files: {cleanup_err}")
+                    continue
+                except Exception as e:
+                    logger.error(f"Unexpected error reading approval file: {e}")
+                    continue
 
                 if approval_data.get("approved"):
                     # Execute the edit

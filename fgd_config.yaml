@@ -1,23 +1,23 @@
+watch_dir: "."
+memory_file: ".fgd_memory.json"
 context_limit: 20
+scan:
+  max_dir_size_gb: 2
+  max_files_per_scan: 5
+  max_file_size_kb: 250
+reference_dirs: []
 llm:
   default_provider: grok
   providers:
-    claude:
-      base_url: https://api.anthropic.com/v1
-      model: claude-3-5-sonnet-20241022
     grok:
-      base_url: https://api.x.ai/v1
       model: grok-3
-    ollama:
-      base_url: http://localhost:11434/v1
-      model: llama3
+      base_url: https://api.x.ai/v1
     openai:
-      base_url: https://api.openai.com/v1
       model: gpt-4o-mini
-memory_file: C:\Users\Admin\Desktop\MCPM-main\.fgd_memory.json
-reference_dirs: []
-scan:
-  max_dir_size_gb: 2
-  max_file_size_kb: 250
-  max_files_per_scan: 5
-watch_dir: C:/Users/Admin/Desktop/MCPM-main
+      base_url: https://api.openai.com/v1
+    claude:
+      model: claude-3-5-sonnet-20241022
+      base_url: https://api.anthropic.com/v1
+    ollama:
+      model: llama3
+      base_url: http://localhost:11434/v1

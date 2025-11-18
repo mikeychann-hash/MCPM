@@ -1733,10 +1733,16 @@ class FGDGUI(QWidget):
     def _read_subprocess_stdout(self):
         """Background thread to read subprocess stdout and write to log file."""
         try:
+            # Capture process reference to avoid race conditions
+            process = self.process
+            if not process or not process.stdout:
+                logger.debug("No process or stdout available")
+                return
+
             # Use readline() instead of iteration to avoid blocking indefinitely
-            while self.process and self.process.poll() is None:
+            while process.poll() is None:
                 try:
-                    line = self.process.stdout.readline()
+                    line = process.stdout.readline()
                     if not line:
                         break
                     decoded = line.decode('utf-8', errors='replace')
@@ -1750,14 +1756,22 @@ class FGDGUI(QWidget):
                     break
         except Exception as e:
             logger.debug(f"Stdout reader stopped: {e}")
+        finally:
+            logger.debug("Stdout reader thread exiting")
 
     def _read_subprocess_stderr(self):
         """Background thread to read subprocess stderr and write to log file."""
         try:
+            # Capture process reference to avoid race conditions
+            process = self.process
+            if not process or not process.stderr:
+                logger.debug("No process or stderr available")
+                return
+
             # Use readline() instead of iteration to avoid blocking indefinitely
-            while self.process and self.process.poll() is None:
+            while process.poll() is None:
                 try:
-                    line = self.process.stderr.readline()
+                    line = process.stderr.readline()
                     if not line:
                         break
                     decoded = line.decode('utf-8', errors='replace')
@@ -1771,6 +1785,8 @@ class FGDGUI(QWidget):
                     break
         except Exception as e:
             logger.debug(f"Stderr reader stopped: {e}")
+        finally:
+            logger.debug("Stderr reader thread exiting")
 
     def toggle_server(self):
         if self.process and self.process.poll() is None:
@@ -1859,13 +1875,16 @@ class FGDGUI(QWidget):
             logger.info(f"Working directory: {mcpm_root}")
 
             try:
+                # Use larger buffer size to reduce deadlock risk (default is -1 for system default)
+                # Setting to 64KB should handle most stderr bursts without blocking
                 self.process = subprocess.Popen(
                     [sys.executable, str(backend_script), str(config_path)],
                     cwd=str(mcpm_root),  # Run from MCPM directory, not user's project
                     env=env,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
+                    stderr=subprocess.PIPE,
+                    bufsize=65536  # 64KB buffer to reduce deadlock risk
                 )
             except Exception as exc:
                 logger.error(f"Failed to launch backend: {exc}")
