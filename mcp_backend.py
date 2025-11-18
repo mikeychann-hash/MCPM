@@ -808,7 +808,7 @@ class FGDMCPServer:
             "mcp_server": {
                 "status": "connected",
                 "name": "fgd-mcp-server",
-                "version": "5.0",
+                "version": "6.0",
                 "watch_directory": str(self.watch_dir),
                 "available_tools": [
                     {
@@ -978,6 +978,13 @@ class FGDMCPServer:
                     path = self._sanitize(arguments["filepath"])
                     if path.stat().st_size > self.max_file_kb:
                         return [TextContent(type="text", text="Error: File too large (>250KB)")]
+
+                    # Binary file detection - check first 8KB for null bytes
+                    with open(path, 'rb') as f:
+                        sample = f.read(8192)
+                    if b'\x00' in sample:
+                        return [TextContent(type="text", text=f"Error: Cannot read binary file {path.name}. File contains null bytes.")]
+
                     content = path.read_text(encoding='utf-8')
                     stat = path.stat()
                     meta = {

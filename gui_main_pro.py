@@ -996,6 +996,7 @@ class FGDGUI(QWidget):
             self.memory_file_path: Optional[Path] = None
             self._memory_last_mtime: Optional[float] = None
             self._log_lock = threading.Lock()  # Thread-safe file writes
+            self._log_write_count = 0  # Track writes for log rotation
             self._log_colors = {
                 "error": QColor(COLORS.ERROR),
                 "warning": QColor(COLORS.WARNING),
@@ -1100,6 +1101,33 @@ class FGDGUI(QWidget):
                 self.settings.setValue("last_provider", self.provider.currentText())
         except Exception as e:
             logger.warning(f"Could not save session: {e}")
+
+    def _rotate_log_if_needed(self):
+        """Rotate log file if it exceeds 10MB to prevent unbounded growth."""
+        MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
+        MAX_ROTATIONS = 5  # Keep up to 5 old log files
+
+        if not self.log_file or not self.log_file.exists():
+            return
+
+        try:
+            if self.log_file.stat().st_size > MAX_LOG_SIZE:
+                # Rotate existing backup files
+                for i in range(MAX_ROTATIONS - 1, 0, -1):
+                    old_file = self.log_file.with_suffix(f'.log.{i}')
+                    new_file = self.log_file.with_suffix(f'.log.{i + 1}')
+                    if old_file.exists():
+                        old_file.replace(new_file)
+
+                # Move current log to .log.1
+                backup = self.log_file.with_suffix('.log.1')
+                self.log_file.replace(backup)
+
+                # Create new empty log file
+                self.log_file.write_text("")
+                logger.info(f"Log file rotated: {self.log_file} -> {backup}")
+        except Exception as e:
+            logger.error(f"Log rotation failed: {e}")
 
     def show_toast(self, message: str, toast_type: str = "info"):
         """Show a toast notification (P1 FIX: GUI-2 - proper repositioning)."""
@@ -1748,6 +1776,11 @@ class FGDGUI(QWidget):
                     decoded = line.decode('utf-8', errors='replace')
                     if self.log_file:
                         with self._log_lock:  # Thread-safe file writes
+                            # Check for rotation every 1000 writes
+                            self._log_write_count += 1
+                            if self._log_write_count % 1000 == 0:
+                                self._rotate_log_if_needed()
+
                             with open(self.log_file, 'a') as f:
                                 f.write(decoded)
                                 f.flush()
@@ -1777,6 +1810,11 @@ class FGDGUI(QWidget):
                     decoded = line.decode('utf-8', errors='replace')
                     if self.log_file:
                         with self._log_lock:  # Thread-safe file writes
+                            # Check for rotation every 1000 writes
+                            self._log_write_count += 1
+                            if self._log_write_count % 1000 == 0:
+                                self._rotate_log_if_needed()
+
                             with open(self.log_file, 'a') as f:
                                 f.write(decoded)
                                 f.flush()
